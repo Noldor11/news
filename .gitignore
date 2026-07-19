@@ -35,3 +35,6 @@ secrets/
 .chrome-debug-profile/
 .handoffs/local/
 .handoffs/*.local.md
+
+# Local live-state exports may contain authentication headers.
+backups/

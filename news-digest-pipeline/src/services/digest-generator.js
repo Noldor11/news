@@ -12,11 +12,90 @@ import {
   getDigest,
 } from '../db/index.js';
 import { priceFor } from '../data/model-catalog.js';
+import { enforceCanonicalDigestLinks } from './digest-links.js';
 
 const MAX_CONTENT_LENGTH = 3000;
 const RETRY_ATTEMPTS = 3;
 const INTER_CALL_DELAY_MS = 200;
 
+const INVALID_COMMENTARY_PATTERNS = [
+  /это\s+не\s+новость/i,
+  /это\s+не\s+текст/i,
+  /не\s+текст\s+для\s+(?:поста|разбора|обработки)/i,
+  /скинь\s+(?:конкретный\s+)?(?:текст|ссылку|новость)/i,
+  /кинь\s+(?:конкретный\s+)?(?:текст|ссылку|новость)/i,
+  /не\s+из\s+чего\s+писать/i,
+  /ноль\s+толку/i,
+  /список\s+(?:твоих\s+)?(?:старых\s+)?запросов/i,
+  /истори[яю]\s+запросов/i,
+  /скриншот/i,
+  /браузер/i,
+];
+
+function isInvalidCommentary(text) {
+  return INVALID_COMMENTARY_PATTERNS.some((pattern) => pattern.test(text || ''));
+}
+
+function buildArticleUserMessage(article, contentTruncated, retry = false) {
+  const parts = [];
+  if (retry) {
+    parts.push('ПРЕДЫДУЩИЙ ОТВЕТ БЫЛ БРАКОМ: нельзя жаловаться на источник или писать, что это не новость. Сделай нормальный короткий авторский комментарий по фактам ниже.');
+    parts.push('Запрещено: "это не новость", "это не текст", "скинь", "кинь", "список запросов", "история запросов", "скриншот", "браузер".');
+  }
+  if (article.title) parts.push(`Заголовок: ${article.title}`);
+  if (article.url) parts.push(`Ссылка: ${article.url}`);
+  parts.push('Ниже карточка новости из проверенного технологического источника. Используй только факты из неё, не обсуждай процесс сбора.');
+  parts.push(contentTruncated || article.title || article.url || '');
+  return parts.join('\n\n');
+}
+
+
+const FORBIDDEN_PROMO_PATTERNS = [
+  /alexeykrol\.com/i,
+  /(?:^|\s)#(?:alexkrol|vibecoding)\b/i,
+  /(?:алекс|алексей)\s+крол/i,
+  /хотите\s+(?:свой|такой же)\s+дайджест/i,
+  /пробн(?:ый|ого)\s+период/i,
+  /бесплатн(?:ый|ого)\s+(?:мини\s+)?курс/i,
+  /создани[ея]\s+ии\s+агентов/i,
+];
+
+function removeForbiddenPromoBlocks(text) {
+  return String(text || '')
+    .split(/\n{2,}/)
+    .filter((block) => !FORBIDDEN_PROMO_PATTERNS.some((pattern) => pattern.test(block)))
+    .join('\n\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function textFromOpenAIResponse(response) {
+  if (typeof response?.output_text === 'string' && response.output_text.trim()) {
+    return response.output_text.trim();
+  }
+
+  return (response?.output || [])
+    .filter((item) => item?.type === 'message')
+    .flatMap((item) => item.content || [])
+    .filter((part) => part?.type === 'output_text' && part.text)
+    .map((part) => part.text)
+    .join('\n\n')
+    .trim();
+}
+
+function humanizeDigestPunctuation(text) {
+  return String(text || '')
+    .replace(/[—–]/g, ',')
+    .replace(/пи\.\.ец/gi, 'пиздец')
+    .replace(/пиз\.\.ец/gi, 'пиздец')
+    .replace(/б\*+/gi, 'блядь')
+    .replace(/х\*й/gi, 'хуй')
+    .replace(/[ \t]+,/g, ',')
+    .replace(/,{2,}/g, ',')
+    .replace(/\s+([,.!?;:])/g, '$1')
+    .replace(/([,.!?;:])([^\s\n])/g, '$1 $2')
+    .trim();
+}
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -61,18 +140,26 @@ async function callModel(config, { system, user, maxTokens }) {
       apiKey: config.openaiApiKey,
       baseURL: config.openaiBaseUrl || undefined,
     });
-    const resp = await withRetry(() => client.chat.completions.create({
+    const supportedEfforts = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+    const effort = supportedEfforts.has(config.openaiReasoningEffort)
+      ? config.openaiReasoningEffort
+      : 'high';
+    const resp = await withRetry(() => client.responses.create({
       model: config.claudeModel,
-      max_tokens: maxTokens,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
+      instructions: system,
+      input: user,
+      max_output_tokens: maxTokens,
+      reasoning: { effort },
+      store: false,
     }));
+    const text = textFromOpenAIResponse(resp);
+    if (!text) {
+      throw new Error('OpenAI returned an empty response');
+    }
     return {
-      text: resp.choices[0]?.message?.content || '',
-      inputTokens: resp.usage?.prompt_tokens || 0,
-      outputTokens: resp.usage?.completion_tokens || 0,
+      text,
+      inputTokens: resp.usage?.input_tokens || 0,
+      outputTokens: resp.usage?.output_tokens || 0,
     };
   }
 
@@ -87,8 +174,11 @@ async function callModel(config, { system, user, maxTokens }) {
     system,
     messages: [{ role: 'user', content: user }],
   }));
+  const textBlocks = Array.isArray(resp.content)
+    ? resp.content.filter((block) => block?.type === 'text' && block.text).map((block) => block.text)
+    : [];
   return {
-    text: resp.content[0]?.text || '',
+    text: textBlocks.join('\n\n'),
     inputTokens: resp.usage?.input_tokens || 0,
     outputTokens: resp.usage?.output_tokens || 0,
   };
@@ -126,18 +216,25 @@ export async function generateDigest(db, articles, config) {
 
       const contentTruncated = (article.content || '').slice(0, MAX_CONTENT_LENGTH);
 
-      const userMessage = article.title
-        ? `${article.title}\n\n${contentTruncated}`
-        : contentTruncated;
+      let commentary = '';
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await callModel(config, {
+          system: commentarySystem,
+          user: buildArticleUserMessage(article, contentTruncated, attempt > 0),
+          maxTokens: 512,
+        });
+        commentary = humanizeDigestPunctuation(res.text);
+        totalInputTokens += res.inputTokens;
+        totalOutputTokens += res.outputTokens;
 
-      const res = await callModel(config, {
-        system: commentarySystem,
-        user: userMessage,
-        maxTokens: 512,
-      });
-      const commentary = res.text;
-      totalInputTokens += res.inputTokens;
-      totalOutputTokens += res.outputTokens;
+        if (!isInvalidCommentary(commentary)) break;
+        log.push('Rejected invalid commentary for article ' + article.id + '; retrying once');
+      }
+
+      if (isInvalidCommentary(commentary)) {
+        throw new Error('Model returned an invalid meta-commentary after retry');
+      }
+
       updateArticleCommentary(article.id, commentary);
       article.commentary = commentary;
 
@@ -166,17 +263,17 @@ export async function generateDigest(db, articles, config) {
     .map((a, i) => `${i + 1}. ${a.commentary}\n${a.url}`)
     .join('\n\n');
 
+  const optionalAssemblyParts = [];
+
+  if (config.hashtagsSuffix) {
+    optionalAssemblyParts.push(`Нейтральные хэштеги в конце: ${config.hashtagsSuffix}`);
+  }
+
   const assemblyUserMessage = [
     `Вот ${articlesWithCommentary.length} обработанных комментариев для сборки в дайджест:`,
     '',
     commentaryList,
-    '',
-    '---',
-    `Упоминание курса (вставить в середине списка): ${config.courseMention}`,
-    '',
-    `Граница/дисклеймер (в конце): ${config.boundaryIntent}`,
-    '',
-    `Хэштеги (в самом конце): ${config.hashtagsSuffix}`,
+    ...(optionalAssemblyParts.length ? ['', '---', ...optionalAssemblyParts] : []),
   ].join('\n');
 
   log.push('Assembling digest...');
@@ -186,7 +283,7 @@ export async function generateDigest(db, articles, config) {
     user: assemblyUserMessage,
     maxTokens: 16384,
   });
-  let digestContent = assemblyRes.text;
+  let digestContent = removeForbiddenPromoBlocks(humanizeDigestPunctuation(assemblyRes.text));
   totalInputTokens += assemblyRes.inputTokens;
   totalOutputTokens += assemblyRes.outputTokens;
 
@@ -197,6 +294,12 @@ export async function generateDigest(db, articles, config) {
     digestContent = digestContent.substring(digestStart);
     log.push(`Removed ${digestStart} chars of preamble before #новости`);
   }
+
+  digestContent = enforceCanonicalDigestLinks(
+    digestContent,
+    articlesWithCommentary,
+    config.hashtagsSuffix
+  );
 
   // Create digest record
   const digestId = createDigest({

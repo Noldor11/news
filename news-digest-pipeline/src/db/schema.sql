@@ -31,13 +31,33 @@ CREATE TABLE IF NOT EXISTS digests (
   published_at TEXT,
   facebook_post_id TEXT,
   telegram_message_id TEXT,
+  telegram_message_ids TEXT,
+  publication_error TEXT,
   youtube_post_id TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id TEXT PRIMARY KEY,
+  run_key TEXT UNIQUE NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'n8n',
+  status TEXT NOT NULL DEFAULT 'running',
+  stage TEXT NOT NULL DEFAULT 'started',
+  attempts INTEGER NOT NULL DEFAULT 1,
+  degraded INTEGER NOT NULL DEFAULT 0,
+  metrics_json TEXT,
+  digest_id TEXT,
+  telegram_message_ids TEXT,
+  error TEXT,
+  started_at TEXT DEFAULT (datetime('now')),
+  completed_at TEXT,
+  updated_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (digest_id) REFERENCES digests(id)
+);
 CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
 CREATE INDEX IF NOT EXISTS idx_articles_url ON articles(url);
 CREATE INDEX IF NOT EXISTS idx_articles_digest_id ON articles(digest_id);
 CREATE INDEX IF NOT EXISTS idx_digests_date ON digests(date);
 CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_status ON automation_runs(status);

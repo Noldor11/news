@@ -5,23 +5,45 @@ const URL_REGEX = /https?:\/\/[^\s<>"')\]]+/g;
 /**
  * Send a message via Telegram Bot API using fetch.
  */
-async function sendMessage(botToken, chatId, text) {
-  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true,
-    }),
-  });
+export async function sendMessage(botToken, chatId, text, options = {}) {
+  const url = 'https://api.telegram.org/bot' + botToken + '/sendMessage';
+  const maxRateLimitRetries = options.maxRateLimitRetries ?? 2;
 
-  if (!resp.ok) {
-    const body = await resp.text();
-    console.error(`[telegram-bot] sendMessage failed: ${resp.status} ${body}`);
+  for (let attempt = 0; attempt <= maxRateLimitRetries; attempt += 1) {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      }),
+    });
+
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch {
+      data = { description: 'Telegram returned non-JSON response' };
+    }
+
+    if (resp.ok && data?.ok) {
+      return { ok: true, status: resp.status, messageId: String(data.result.message_id) };
+    }
+
+    const retryAfterSeconds = Number(data?.parameters?.retry_after) || 0;
+    if (resp.status === 429 && retryAfterSeconds > 0 && attempt < maxRateLimitRetries) {
+      await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
+      continue;
+    }
+
+    const error = data?.description || 'Telegram HTTP ' + resp.status;
+    console.error('[telegram-bot] sendMessage failed: ' + resp.status + ' ' + error);
+    return { ok: false, status: resp.status, retryAfterSeconds, error };
   }
+
+  return { ok: false, status: 429, error: 'Telegram retry limit exceeded' };
 }
 
 /**

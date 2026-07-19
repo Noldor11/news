@@ -12,6 +12,20 @@ import config from '../config.js';
 
 const router = Router();
 
+function hasTelegramDeliveryRecord(digest) {
+  if (digest.telegram_message_id) return true;
+  try {
+    const messageIds = JSON.parse(digest.telegram_message_ids || '[]');
+    return Array.isArray(messageIds) && messageIds.length > 0;
+  } catch {
+    return Boolean(digest.telegram_message_ids);
+  }
+}
+
+function includesTelegram(platforms) {
+  return !Array.isArray(platforms) || platforms.length === 0 || platforms.includes('telegram');
+}
+
 // POST /api/digests/generate — manual trigger
 router.post('/generate', async (req, res) => {
   try {
@@ -109,28 +123,36 @@ router.get('/:id/text', (req, res) => {
   }
 });
 
-// POST /api/digests/:id/publish — publish to selected platforms
-// Body: { platforms: ["telegram", "facebook"] } — optional, defaults to all
+// POST /api/digests/:id/publish — publish to selected platforms.
+// A digest with a Telegram delivery record cannot be sent again from the UI.
 router.post('/:id/publish', async (req, res) => {
   try {
     const digest = getDigest(req.params.id);
-    if (!digest) {
-      return res.status(404).json({ error: 'Digest not found' });
-    }
-
-    if (!digest.content) {
-      return res.status(400).json({ error: 'Digest has no content to publish' });
-    }
+    if (!digest) return res.status(404).json({ error: 'Digest not found' });
+    if (!digest.content) return res.status(400).json({ error: 'Digest has no content to publish' });
 
     const { platforms } = req.body || {};
+    if (includesTelegram(platforms) && (digest.status === 'publish_partial' || hasTelegramDeliveryRecord(digest))) {
+      return res.status(409).json({
+        error: 'Telegram delivery is already recorded or incomplete. Refusing to risk a duplicate post.',
+        digestId: digest.id,
+        status: digest.status,
+      });
+    }
+
     const results = await publishDigest(digest, config, platforms);
-    res.json({ digestId: digest.id, published: results });
+    const telegram = results.telegram;
+    if (includesTelegram(platforms) && !telegram?.ok) {
+      const code = telegram?.status === 'partial' || telegram?.status === 'blocked' ? 409 : 502;
+      return res.status(code).json({ digestId: digest.id, published: results, error: telegram?.error });
+    }
+
+    return res.json({ digestId: digest.id, published: results });
   } catch (err) {
     console.error('[digests] POST /:id/publish error:', err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
-
 // PATCH /api/digests/:id/mark-copied — mark digest as copied
 router.patch('/:id/mark-copied', (req, res) => {
   try {
@@ -151,38 +173,6 @@ router.patch('/:id/mark-copied', (req, res) => {
   }
 });
 
-// PATCH /api/digests/:id/status — update digest status (draft/published)
-router.patch('/:id/status', (req, res) => {
-  try {
-    const { status } = req.body;
-    if (!status || !['draft', 'published'].includes(status)) {
-      return res.status(400).json({ error: 'Status must be "draft" or "published"' });
-    }
-
-    const digest = getDigest(req.params.id);
-    if (!digest) {
-      return res.status(404).json({ error: 'Digest not found' });
-    }
-
-    const db = getDb();
-    if (status === 'published') {
-      db.prepare(
-        `UPDATE digests SET status = 'published', published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
-      ).run(req.params.id);
-    } else {
-      db.prepare(
-        `UPDATE digests SET status = 'draft', published_at = NULL, updated_at = datetime('now') WHERE id = ?`
-      ).run(req.params.id);
-    }
-
-    const updated = getDigest(req.params.id);
-    res.json({ ok: true, id: req.params.id, status: updated.status, published_at: updated.published_at });
-  } catch (err) {
-    console.error('[digests] PATCH /:id/status error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // DELETE /api/digests/:id — delete a digest
 router.delete('/:id', (req, res) => {
   try {
@@ -191,6 +181,11 @@ router.delete('/:id', (req, res) => {
       return res.status(404).json({ error: 'Digest not found' });
     }
 
+    if (digest.status === 'publish_partial' || hasTelegramDeliveryRecord(digest)) {
+      return res.status(409).json({
+        error: 'A digest with a Telegram delivery record cannot be deleted because it could be posted again later.',
+      });
+    }
     const db = getDb();
     // Unlink articles from this digest (set them back to 'new')
     db.prepare(`UPDATE articles SET digest_id = NULL, status = 'new', commentary = NULL WHERE digest_id = ?`).run(req.params.id);

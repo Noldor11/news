@@ -6,13 +6,14 @@
 // Sources:
 //   - Anthropic: https://claude.com/pricing
 //   - OpenAI:    https://developers.openai.com/api/docs/pricing
-// Verified: 2026-05-31
+// Verified: 2026-07-15
 //
 // This is a hand-maintained reference. Update ids/labels/pricing here as the
 // vendors change their lineups; everything else reads from this single source.
 
 export const MODEL_CATALOG = {
   anthropic: [
+    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', pricing: { input: 2, output: 10 } },
     { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', pricing: { input: 5, output: 25 } },
     { id: 'claude-opus-4-7', label: 'Claude Opus 4.7', pricing: { input: 5, output: 25 } },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', pricing: { input: 5, output: 25 } },
@@ -22,6 +23,7 @@ export const MODEL_CATALOG = {
     { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', pricing: { input: 1, output: 5 } },
   ],
   openai: [
+    { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', pricing: { input: 2.5, output: 15 } },
     { id: 'gpt-5.5', label: 'GPT-5.5', pricing: { input: 5, output: 30 } },
     { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', pricing: { input: 30, output: 180 } },
     { id: 'gpt-5.4', label: 'GPT-5.4', pricing: { input: 2.5, output: 15 } },

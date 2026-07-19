@@ -42,6 +42,11 @@ async function processQueue(config) {
 }
 
 export function startQueueManager(config) {
+  if (!config.autoQueueEnabled) {
+    console.log('[queue-manager] Disabled; n8n owns daily collection and generation');
+    return null;
+  }
+
   console.log(`[queue-manager] Started (interval: ${config.checkIntervalMs}ms, threshold: ${config.articleThreshold})`);
 
   const intervalId = setInterval(() => processQueue(config), config.checkIntervalMs);

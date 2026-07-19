@@ -76,28 +76,7 @@
       font-size: 15px;
       margin-bottom: 20px;
     }
-
-    /* Course banner */
-    .course-banner {
-      background: rgba(124,58,237,0.05);
-      border: 1px solid rgba(124,58,237,0.12);
-      border-radius: 10px;
-      padding: 12px 16px;
-      margin-bottom: 20px;
-      font-size: 14px;
-      color: #8a8580;
-      line-height: 1.6;
-    }
-    .course-banner strong { color: #a78bfa; font-weight: 600; }
-    .course-banner a {
-      color: #7c3aed;
-      text-decoration: none;
-      font-weight: 600;
-      transition: color 0.2s;
-    }
-    .course-banner a:hover { color: #a78bfa; }
-
-    /* Table as card list */
+/* Table as card list */
     table {
       width: 100%;
       border-collapse: separate;
@@ -145,44 +124,25 @@
     .pub-date { color: #22c55e; font-size: 14px; font-weight: 500; }
     .no-pub { color: #ccc; font-size: 13px; }
 
-    /* Status select */
-    .status-select {
+    /* Read-only status badge. Publication must go through the platform action. */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
       padding: 5px 10px;
       border-radius: 8px;
       font-size: 14px;
       font-weight: 500;
       border: 1px solid #ddd8d0;
-      cursor: pointer;
-      outline: none;
       background: #ffffff;
-      color: #2d2a26;
-      font-family: 'Inter', sans-serif;
-      transition: border-color 0.2s, box-shadow 0.2s;
-      -webkit-appearance: none;
-      appearance: none;
-      padding-right: 24px;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238a8580' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 8px center;
+      color: #8a8580;
+      white-space: nowrap;
     }
-    .status-select:hover { border-color: #b0aaa4; }
-    .status-select:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,0.15); }
-    .status-select option { background: #ffffff; color: #2d2a26; }
-
-    .status-select.is-draft {
-      background-color: rgba(245,158,11,0.08);
-      color: #d97706;
-      border-color: rgba(245,158,11,0.25);
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23f59e0b' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
-    }
-    .status-select.is-published {
-      background-color: rgba(34,197,94,0.08);
-      color: #16a34a;
-      border-color: rgba(34,197,94,0.25);
-      box-shadow: 0 0 8px rgba(34,197,94,0.06);
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2322c55e' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
-    }
-
+    .status-badge.is-draft { background: rgba(245,158,11,0.08); color: #d97706; border-color: rgba(245,158,11,0.25); }
+    .status-badge.is-published { background: rgba(34,197,94,0.08); color: #16a34a; border-color: rgba(34,197,94,0.25); }
+    .status-badge.is-publish-partial { background: rgba(239,68,68,0.08); color: #dc2626; border-color: rgba(239,68,68,0.28); }
+    .status-badge.is-publish-failed { background: rgba(239,68,68,0.08); color: #b45309; border-color: rgba(239,68,68,0.28); }
+    .status-badge.is-copied { background: rgba(59,130,246,0.08); color: #2563eb; border-color: rgba(59,130,246,0.25); }
     /* Buttons base */
     .btn {
       border: none;
@@ -446,11 +406,6 @@
       </div>
     </div>
     <p class="subtitle" id="subtitle">Загрузка...</p>
-    <div class="course-banner">
-      Проект реализован в рамках учебного курса: <strong>Создание ИИ Агентов и приложений для бизнеса, роста, дохода и кайфа.</strong>
-      Хотите научиться делать такое же? Попробуйте этот курс. 14 дней пробный период:
-      <a href="https://alexeykrol.com/ai_full/" target="_blank" rel="noopener">alexeykrol.com/ai_full/</a>
-    </div>
     <table>
       <thead>
         <tr>
@@ -530,31 +485,41 @@
           ? `<span class="pub-date">${pub.date} ${pub.time}</span>`
           : '<span class="no-pub">—</span>';
 
-        // Action buttons — per-platform
+        const statusLabels = {
+          draft: 'Черновик',
+          published: 'Опубликован',
+          publish_partial: 'Частично отправлен',
+          publish_failed: 'Ошибка отправки',
+          copied: 'Скопирован',
+        };
+        const statusClass = `is-${status.replace('_', '-')}`;
+        const statusBadge = `<span class="status-badge ${statusClass}">${statusLabels[status] || status}</span>`;
+
+        // Action buttons — per-platform. A recorded or partial Telegram send is
+        // deliberately non-retryable from the UI to prevent duplicate posts.
         let actionBtn = '';
         if (!hasContent) {
           actionBtn = '<span style="color:#444;font-size:12px">нет контента</span>';
         } else {
-          const tgSent = !!d.telegram_message_id;
+          let hasTelegramRecord = !!d.telegram_message_id;
+          try {
+            hasTelegramRecord = hasTelegramRecord || JSON.parse(d.telegram_message_ids || '[]').length > 0;
+          } catch {
+            hasTelegramRecord = hasTelegramRecord || !!d.telegram_message_ids;
+          }
           const fbSent = !!d.facebook_post_id;
-
-          const tgBtn = tgSent
-            ? `<button class="plat-btn sent" disabled>✓ TG</button>`
+          const telegramPartial = status === 'publish_partial';
+          const tgBtn = hasTelegramRecord || telegramPartial
+            ? `<button class="plat-btn sent" disabled>${telegramPartial ? 'TG частично' : '✓ TG'}</button>`
             : `<button class="plat-btn" onclick="publishPlatform('${d.id}','telegram',this)">📨 TG</button>`;
           const fbBtn = fbSent
             ? `<button class="plat-btn sent" disabled>✓ FB</button>`
             : `<button class="plat-btn" onclick="publishPlatform('${d.id}','facebook',this)">📘 FB</button>`;
-
-          const delBtn = `<button class="btn-delete" onclick="deleteDigest('${d.id}')">✕</button>`;
+          const delBtn = hasTelegramRecord || telegramPartial
+            ? ''
+            : `<button class="btn-delete" onclick="deleteDigest('${d.id}')">✕</button>`;
           actionBtn = `<div class="platform-row"><button class="btn btn-preview" onclick="previewDigest('${d.id}')">&#128065;</button>${tgBtn}${fbBtn}<button class="btn btn-copy" onclick="copyDigest('${d.id}', this)">&#128203;</button>${delBtn}</div>`;
         }
-
-        // Status dropdown
-        const statusSelect = `<select class="status-select ${selectClass}" onchange="changeStatus('${d.id}', this)">
-          <option value="draft" ${status !== 'published' ? 'selected' : ''}>Черновик</option>
-          <option value="published" ${status === 'published' ? 'selected' : ''}>Опубликован</option>
-        </select>`;
-
         // Cost cell
         let costHtml;
         if (d.cost_usd !== null && d.cost_usd !== undefined) {
@@ -572,7 +537,7 @@
           <td>${pubHtml}</td>
           <td><span class="articles-count">${d.articles_count || 0}</span></td>
           <td>${costHtml}</td>
-          <td>${statusSelect}</td>
+          <td>${statusBadge}</td>
           <td>${actionBtn}</td>
         </tr>`;
       }).join('');
@@ -593,25 +558,6 @@
       }
     }
 
-    async function changeStatus(id, select) {
-      try {
-        const status = select.value;
-        const res = await fetch(`/api/digests/${id}/status`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status }),
-        });
-        if (!res.ok) throw new Error('Server error');
-        select.className = 'status-select ' + (status === 'published' ? 'is-published' : 'is-draft');
-        // Reload to update published date
-        setTimeout(loadDigests, 300);
-      } catch (err) {
-        console.error('Status update failed:', err);
-        alert('Не удалось обновить статус');
-        loadDigests(); // reload to reset
-      }
-    }
-
     async function publishPlatform(id, platform, btn) {
       const names = { telegram: 'Telegram', facebook: 'Facebook' };
       if (!confirm('Опубликовать в ' + names[platform] + '?')) return;
@@ -627,7 +573,7 @@
         if (!res.ok) throw new Error(data.error || 'Server error');
 
         const result = data.published?.[platform];
-        if (result) {
+        if (result?.ok) {
           btn.className = 'plat-btn sent';
           btn.textContent = '✓ ' + (platform === 'telegram' ? 'TG' : 'FB');
           btn.onclick = null;

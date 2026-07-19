@@ -58,7 +58,9 @@ function parseConfigMd(text) {
     const heading = lines[0]?.trim().toLowerCase() || '';
     const body = lines.slice(1).join('\n').trim();
 
-    if (heading.startsWith('хэштег') || heading.startsWith('хештег')) {
+    if (heading.startsWith('хэштеги в конце') || heading.startsWith('хештеги в конце')) {
+      result.hashtagsSuffix = body.trim();
+    } else if (heading.startsWith('хэштег') || heading.startsWith('хештег')) {
       result.hashtag = body.trim() || '#новости';
     } else if (heading.includes('упоминание курса')) {
       result.courseMention = body.trim();
@@ -89,6 +91,7 @@ function buildConfig() {
 
   return {
     port: parseInt(process.env.PORT || '3000', 10),
+    apiSecretKey: process.env.API_SECRET_KEY || '',
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
     falKey: process.env.FAL_KEY || '',
     claudeModel: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
@@ -99,12 +102,23 @@ function buildConfig() {
     anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL || '',
     openaiBaseUrl: process.env.OPENAI_BASE_URL || '',
     openaiApiKey: process.env.OPENAI_API_KEY || '', // secret
+    // Used only by the OpenAI Responses API. High keeps the daily digest
+    // quality-focused without paying the latency and token cost of max.
+    openaiReasoningEffort: process.env.LLM_REASONING_EFFORT || 'high',
     geminiApiKey: process.env.GEMINI_API_KEY || '', // secret (planned integrations)
     dbPath: process.env.DB_PATH || './data/news-digest.db',
     ntfyTopic: process.env.NTFY_TOPIC || '',
-    articleThreshold: parseInt(process.env.ARTICLE_THRESHOLD || '13', 10),
+    articleThreshold: parseInt(process.env.ARTICLE_THRESHOLD || '15', 10),
+    minArticlesPerDigest: parseInt(process.env.MIN_ARTICLES_PER_DIGEST || '15', 10),
+    hardMinArticlesPerDigest: parseInt(process.env.MIN_PUBLISHABLE_ARTICLES || '8', 10),
     maxArticlesPerDigest: parseInt(process.env.MAX_ARTICLES_PER_DIGEST || '17', 10),
+    rssMaxArticleAgeHours: parseInt(process.env.RSS_MAX_ARTICLE_AGE_HOURS || '36', 10),
+    rssFallbackMaxArticleAgeHours: parseInt(process.env.RSS_FALLBACK_MAX_ARTICLE_AGE_HOURS || '72', 10),
+    rssMaxArticlesPerSource: parseInt(process.env.RSS_MAX_ARTICLES_PER_SOURCE || '3', 10),
+    rssFetchRetries: parseInt(process.env.RSS_FETCH_RETRIES || '2', 10),
     checkIntervalMs: parseInt(process.env.CHECK_INTERVAL_MS || '60000', 10),
+    // The daily n8n workflow owns collection and generation in production.
+    autoQueueEnabled: process.env.AUTO_QUEUE_ENABLED === 'true',
     nodeEnv: process.env.NODE_ENV || 'development',
 
     // Active commentary scenario for Phase A: 'sarcastic' (prompt.md) or
@@ -117,6 +131,8 @@ function buildConfig() {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
     telegramPublishChatId: process.env.TELEGRAM_PUBLISH_CHAT_ID || '',
+    telegramAlertChatId: process.env.TELEGRAM_ALERT_CHAT_ID || '',
+    n8nDailyTriggerSecret: process.env.N8N_DAILY_TRIGGER_SECRET || '',
     youtubeAccessToken: process.env.YOUTUBE_ACCESS_TOKEN || '',
     youtubeChannelId: process.env.YOUTUBE_CHANNEL_ID || '',
 

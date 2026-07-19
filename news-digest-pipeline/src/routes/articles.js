@@ -199,6 +199,8 @@ router.patch('/:id', (req, res) => {
     // Reset status and clear error if we got content
     if (content) {
       updates.push('fetch_error = NULL');
+      updates.push('commentary = NULL');
+      updates.push('digest_id = NULL');
       updates.push("status = 'new'");
     }
 
