@@ -1,10 +1,38 @@
 import { pathToFileURL } from 'node:url';
 const BASE_URL = String(process.env.BASE_URL || '').replace(new RegExp('/+$'), '');
 const DAILY_SECRET = process.env.N8N_DAILY_TRIGGER_SECRET || '';
-const API_KEY = process.env.API_SECRET_KEY || '';
+const API_KEY = process.env.MONITOR_API_KEY || '';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ALERT_CHAT_ID = process.env.TELEGRAM_ALERT_CHAT_ID || '';
 const REQUEST_TIMEOUT_MS = 180000;
+
+function replaceSecret(text, secret) {
+  if (!secret || String(secret).length < 8) return text;
+  return text.split(String(secret)).join('[REDACTED]');
+}
+
+export function sanitizeDiagnostic(value) {
+  let text = String(value ?? '');
+  for (const secret of [API_KEY, DAILY_SECRET, BOT_TOKEN]) text = replaceSecret(text, secret);
+  return text
+    .replace(/\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY)[A-Z0-9_]*)=([^\s&]+)/gi, '$1=[REDACTED]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{16,}/gi, 'Bearer [REDACTED]')
+    .replace(/\b\d{8,12}:[A-Za-z0-9_-]{20,}/g, '[TELEGRAM_TOKEN_REDACTED]')
+    .slice(0, 300);
+}
+
+export function diagnosticCode(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  if (message.includes('parse url') || message.includes('invalid url')) return 'invalid_application_url';
+  if (message.includes('abort') || message.includes('timeout')) return 'request_timeout';
+  if (message.includes('fetch')) return 'network_request_failed';
+  return 'request_failed';
+}
+
+function safeState(value, fallback = 'unknown') {
+  const state = String(value || '').slice(0, 120);
+  return /^[A-Za-z0-9:._ /-]+$/.test(state) ? state : fallback;
+}
 
 function kyivParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -80,9 +108,9 @@ async function recover() {
   });
   const data = await readJson(response);
   if (!response.ok) {
-    const detail = String(data?.error || data?.reason || 'HTTP ' + response.status).replace(/[<>]/g, '');
-    await sendAlert('GDN external recovery failed for ' + dateKey() + '. ' + detail);
-    throw new Error(detail);
+    const detail = safeState(data?.reason || data?.error, 'http_error');
+    await sendAlert('GDN external recovery failed for ' + dateKey() + '. HTTP ' + response.status + '; state: ' + detail);
+    throw new Error('Recovery HTTP ' + response.status + '; state: ' + detail);
   }
   console.log(JSON.stringify({
     action: 'recover',
@@ -97,11 +125,13 @@ async function verify() {
   let response;
   let health;
   try {
-    response = await fetchWithTimeout(BASE_URL + '/health');
+    response = await fetchWithTimeout(BASE_URL + '/api/health', {
+      headers: { Authorization: 'Bearer ' + API_KEY },
+    });
     health = await readJson(response);
     if (!response.ok) throw new Error('Health HTTP ' + response.status);
   } catch (error) {
-    await sendAlert('GDN external monitor: application unavailable. ' + String(error.message).replace(/[<>]/g, ''));
+    await sendAlert('GDN external monitor: application unavailable. Code: ' + diagnosticCode(error));
     throw error;
   }
 
@@ -111,7 +141,7 @@ async function verify() {
 
   if (!confirmed) {
     const actual = health?.latestRun
-      ? health.latestRun.runKey + ' / ' + health.latestRun.status
+      ? safeState(health.latestRun.runKey) + ' / ' + safeState(health.latestRun.status)
       : 'missing';
     await sendAlert('GDN external monitor: no confirmed digest for ' + dateKey() + '. State: ' + actual);
     throw new Error('Digest is not confirmed: ' + actual);
@@ -126,7 +156,7 @@ async function verify() {
 }
 
 async function main() {
-  if (!BASE_URL || !DAILY_SECRET || !API_KEY) throw new Error('BASE_URL or N8N_DAILY_TRIGGER_SECRET is missing');
+  if (!BASE_URL || !DAILY_SECRET || !API_KEY) throw new Error('Monitor authentication configuration is missing');
   const forcedAction = process.env.MONITOR_FORCE_ACTION;
   const action = ['recover', 'verify'].includes(forcedAction) ? forcedAction : currentAction();
   if (action === 'recover') return recover();
@@ -136,7 +166,7 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    console.error(error.message);
+    console.error(diagnosticCode(error));
     process.exit(1);
   });
 }

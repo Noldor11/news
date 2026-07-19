@@ -18,6 +18,7 @@ import {
 import { runDailyRssDigest } from '../services/rss-digest-runner.js';
 import { publishDigest } from '../services/publishers/index.js';
 import { sendMessage } from '../services/telegram-bot.js';
+import { redactSecrets, safeErrorMessage } from '../security/redact.js';
 
 const router = Router();
 
@@ -72,12 +73,23 @@ function alertChatId() {
   return config.telegramAlertChatId || config.telegramChatId || config.telegramPublishChatId;
 }
 
+function configuredSecrets() {
+  return [
+    config.apiSecretKey,
+    config.n8nDailyTriggerSecret,
+    config.telegramBotToken,
+    config.telegramWebhookSecret,
+    config.anthropicApiKey,
+    config.openaiApiKey,
+  ].filter(Boolean);
+}
+
 async function sendAutomationAlert(message) {
   const chatId = alertChatId();
   if (!config.telegramBotToken || !chatId) {
     return { ok: false, error: 'Telegram alert target is not configured' };
   }
-  return sendMessage(config.telegramBotToken, chatId, message);
+  return sendMessage(config.telegramBotToken, chatId, redactSecrets(message, configuredSecrets()));
 }
 
 function hasTelegramDeliveryRecord(digest) {
@@ -248,14 +260,15 @@ async function executeDigest(req, res, trigger) {
   } catch (error) {
     const status = phase === 'publishing' ? 'partial' : 'failed';
     const retryable = error.retryable !== false;
+    const safeError = safeErrorMessage(error, 'Digest automation failed', configuredSecrets());
     updateAutomationRun(claim.run.id, {
       status,
       stage: status === 'partial' ? 'delivery_unknown' : 'failed',
       metrics_json: metricsJson(error.metrics || {}),
-      error: error.message,
+      error: safeError,
       completed_at: status === 'partial' ? finishedAt() : null,
     });
-    console.error('[automation] digest run error:', error);
+    console.error('[automation] digest run error:', safeError);
     return res.status(status === 'partial' ? 409 : retryable ? 500 : 422).json({
       ok: false,
       retryable,
@@ -263,7 +276,7 @@ async function executeDigest(req, res, trigger) {
       trigger,
       state: status,
       metrics: error.metrics || {},
-      error: error.message,
+      error: safeError,
     });
   }
 }
@@ -293,8 +306,8 @@ function executeRecoveryDigest(req, res) {
 }
 
 async function executeAutomationAlert(req, res) {
-  const event = String(req.body?.event || 'workflow_error').slice(0, 120);
-  const detail = String(req.body?.detail || 'No detail provided').slice(0, 1200);
+  const event = redactSecrets(String(req.body?.event || 'workflow_error'), configuredSecrets()).slice(0, 120);
+  const detail = redactSecrets(String(req.body?.detail || 'No detail provided'), configuredSecrets()).slice(0, 1200);
   const message = ['GDN automation alert', 'Event: ' + event, 'Detail: ' + detail].join('\n');
   const result = await sendAutomationAlert(message);
   return res.status(result?.ok ? 200 : 502).json({

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { safeErrorMessage } from '../security/redact.js';
 import {
   getDigest,
   getDigests,
@@ -51,8 +52,8 @@ router.post('/generate', async (req, res) => {
 
     res.status(201).json({ digestId });
   } catch (err) {
-    console.error('[digests] POST /generate error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[digests] POST /generate error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -66,8 +67,8 @@ router.get('/', (req, res) => {
     const digests = getDigests(filters);
     res.json(digests);
   } catch (err) {
-    console.error('[digests] GET / error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[digests] GET / error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -84,8 +85,8 @@ router.get('/latest/text', (req, res) => {
     }
     res.type('text/plain; charset=utf-8').send(latest.content);
   } catch (err) {
-    console.error('[digests] GET /latest/text error:', err);
-    res.status(500).send(err.message);
+    console.error('[digests] GET /latest/text error:', safeErrorMessage(err));
+    res.status(500).send('Internal server error');
   }
 });
 
@@ -101,8 +102,8 @@ router.get('/:id', (req, res) => {
 
     res.json({ ...digest, articles });
   } catch (err) {
-    console.error('[digests] GET /:id error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[digests] GET /:id error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -118,8 +119,8 @@ router.get('/:id/text', (req, res) => {
     }
     res.type('text/plain; charset=utf-8').send(digest.content);
   } catch (err) {
-    console.error('[digests] GET /:id/text error:', err);
-    res.status(500).send(err.message);
+    console.error('[digests] GET /:id/text error:', safeErrorMessage(err));
+    res.status(500).send('Internal server error');
   }
 });
 
@@ -149,8 +150,8 @@ router.post('/:id/publish', async (req, res) => {
 
     return res.json({ digestId: digest.id, published: results });
   } catch (err) {
-    console.error('[digests] POST /:id/publish error:', err);
-    return res.status(500).json({ error: err.message });
+    console.error('[digests] POST /:id/publish error:', safeErrorMessage(err));
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 // PATCH /api/digests/:id/mark-copied — mark digest as copied
@@ -168,8 +169,8 @@ router.patch('/:id/mark-copied', (req, res) => {
 
     res.json({ ok: true, id: req.params.id, status: 'copied' });
   } catch (err) {
-    console.error('[digests] PATCH /:id/mark-copied error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[digests] PATCH /:id/mark-copied error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -194,8 +195,8 @@ router.delete('/:id', (req, res) => {
 
     res.json({ ok: true, deleted: req.params.id });
   } catch (err) {
-    console.error('[digests] DELETE /:id error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[digests] DELETE /:id error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

@@ -89,7 +89,7 @@ async function sendOne(botToken, chatId, text) {
       ok: false,
       retrySafe: false,
       deliveryUnknown: true,
-      error: error.message || 'Telegram network error',
+      error: 'Telegram network error',
     };
   }
 }

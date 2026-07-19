@@ -115,8 +115,8 @@ async function handleGenerate(botToken, chatId, config) {
     const digestId = await generateDigest(db, articles, config);
     await sendMessage(botToken, chatId, `✅ Дайджест сгенерирован (${articles.length} статей). ID: ${digestId}`);
   } catch (err) {
-    console.error('[telegram-bot] Generate error:', err);
-    await sendMessage(botToken, chatId, `❌ Ошибка генерации: ${err.message}`);
+    console.error('[telegram-bot] Generate error');
+    await sendMessage(botToken, chatId, '❌ Ошибка генерации дайджеста');
   }
 }
 
@@ -266,6 +266,10 @@ export async function setupTelegramBot(config) {
   if (!config.baseUrl) {
     console.warn('[telegram-bot] BASE_URL not set, skipping webhook setup');
     return;
+  }
+
+  if (!config.telegramWebhookSecret) {
+    throw new Error('Telegram webhook authentication is not configured');
   }
 
   const webhookUrl = `${config.baseUrl}/api/telegram/webhook`;

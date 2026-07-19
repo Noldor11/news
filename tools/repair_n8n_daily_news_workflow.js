@@ -6,6 +6,7 @@ const ROOT = 'C:/Users/artur/Desktop/Proj';
 const WORKFLOW_ID = 'WaebNhCrxEVxhCfY';
 const ERROR_WORKFLOW_NAME = 'GDN Daily Error Alerts';
 const APP_BASE_URL = 'https://news-digest-app-production-9938.up.railway.app';
+const DAILY_SECRET_EXPRESSION = '={{ $env.NEWS_DIGEST_DAILY_SECRET }}';
 
 function readText(file) {
   return fs.readFileSync(file, 'utf8').trim();
@@ -47,7 +48,16 @@ function headerValue(node, name) {
   return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
 }
 
-function httpNode(name, url, secret, authorization, position) {
+function setHeaderValue(node, name, value) {
+  node.parameters.headerParameters ||= { parameters: [] };
+  node.parameters.headerParameters.parameters ||= [];
+  const headers = node.parameters.headerParameters.parameters;
+  const existing = headers.find((header) => header.name.toLowerCase() === name.toLowerCase());
+  if (existing) existing.value = value;
+  else headers.push({ name, value });
+}
+
+function httpNode(name, url, authorization, position) {
   return {
     id: rid(),
     name,
@@ -61,7 +71,7 @@ function httpNode(name, url, secret, authorization, position) {
       headerParameters: {
         parameters: [
           { name: 'Authorization', value: authorization },
-          { name: 'X-N8N-Daily-Secret', value: secret },
+          { name: 'X-N8N-Daily-Secret', value: DAILY_SECRET_EXPRESSION },
         ],
       },
       options: { timeout: 900000 },
@@ -70,7 +80,7 @@ function httpNode(name, url, secret, authorization, position) {
   };
 }
 
-async function ensureErrorWorkflow(baseUrl, apiKey, secret, authorization) {
+async function ensureErrorWorkflow(baseUrl, apiKey, authorization) {
   const list = await n8nRequest(baseUrl, apiKey, 'GET', '/api/v1/workflows?limit=100');
   let workflow = (list.data || []).find((item) => item.name === ERROR_WORKFLOW_NAME);
 
@@ -85,7 +95,6 @@ async function ensureErrorWorkflow(baseUrl, apiKey, secret, authorization) {
   const alertNode = httpNode(
     'Send GDN Error Alert',
     APP_BASE_URL + '/api/automation/alert',
-    secret,
     authorization,
     [280, 0],
   );
@@ -116,12 +125,11 @@ async function main() {
   const mainNode = workflow.nodes.find((node) => node.name === 'Collect AI News -> Generate -> Publish');
   if (!mainNode) throw new Error('Main HTTP node not found');
 
-  const secret = headerValue(mainNode, 'X-N8N-Daily-Secret');
   const authorization = headerValue(mainNode, 'Authorization');
-  if (!secret) throw new Error('Daily secret header not found');
   if (!authorization) throw new Error('Authorization header not found');
+  setHeaderValue(mainNode, 'X-N8N-Daily-Secret', DAILY_SECRET_EXPRESSION);
 
-  const errorWorkflowId = await ensureErrorWorkflow(baseUrl, apiKey, secret, authorization);
+  const errorWorkflowId = await ensureErrorWorkflow(baseUrl, apiKey, authorization);
 
   mainNode.retryOnFail = false;
   delete mainNode.maxTries;
@@ -169,17 +177,23 @@ async function main() {
     recoveryNode = httpNode(
       recoveryNodeName,
       APP_BASE_URL + '/api/automation/daily-recovery',
-      secret,
       authorization,
       [300, 360],
     );
     workflow.nodes.push(recoveryNode);
   } else {
     recoveryNode.parameters.url = APP_BASE_URL + '/api/automation/daily-recovery';
+    setHeaderValue(recoveryNode, 'Authorization', authorization);
+    setHeaderValue(recoveryNode, 'X-N8N-Daily-Secret', DAILY_SECRET_EXPRESSION);
     recoveryNode.retryOnFail = false;
     delete recoveryNode.maxTries;
     delete recoveryNode.waitBetweenTries;
   }
+
+  const verifyNode = workflow.nodes.find((node) => node.name === 'Verify Daily Publication');
+  if (!verifyNode) throw new Error('Watchdog HTTP node not found');
+  setHeaderValue(verifyNode, 'Authorization', authorization);
+  setHeaderValue(verifyNode, 'X-N8N-Daily-Secret', DAILY_SECRET_EXPRESSION);
 
   workflow.connections[recoveryTriggerName] = {
     main: [[{ node: recoveryNodeName, type: 'main', index: 0 }]],

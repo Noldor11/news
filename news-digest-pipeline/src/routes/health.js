@@ -7,8 +7,22 @@ import {
 } from '../db/index.js';
 
 const router = Router();
+export const healthDetailsRouter = Router();
 
 router.get('/', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+router.get('/ready', (req, res) => {
+  try {
+    getDb().prepare('SELECT 1 AS ok').get();
+    res.json({ status: 'ready' });
+  } catch {
+    res.status(503).json({ status: 'not_ready' });
+  }
+});
+
+healthDetailsRouter.get('/', (req, res) => {
   try {
     const articles = {
       new: getArticleCount('new'),
@@ -21,8 +35,6 @@ router.get('/', (req, res) => {
     const runIsDegraded = ['failed', 'partial'].includes(latestRun?.status);
 
     res.json({
-      // Keep HTTP 200 for Railway liveness while exposing an actionable state
-      // to the dashboard/monitoring layer.
       status: runIsDegraded ? 'degraded' : 'ok',
       articles,
       latestPublished: latestPublished ? {
@@ -43,17 +55,8 @@ router.get('/', (req, res) => {
       } : null,
       uptime: process.uptime(),
     });
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-router.get('/ready', (req, res) => {
-  try {
-    getDb().prepare('SELECT 1 AS ok').get();
-    res.json({ status: 'ready' });
-  } catch (error) {
-    res.status(503).json({ status: 'not_ready', message: error.message });
+  } catch {
+    res.status(500).json({ status: 'error' });
   }
 });
 

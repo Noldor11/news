@@ -114,11 +114,16 @@ export function apiAuth(req, res, next) {
     return res.status(503).json({ error: 'API authentication is not configured' });
   }
 
-  // Check Bearer token
+  // Check Bearer token. The monitor key is intentionally scoped to read-only
+  // health and the recovery route, which has an additional daily-secret guard.
   const authHeader = req.headers.authorization || '';
   if (authHeader.startsWith('Bearer ')) {
     const bearer = authHeader.slice(7);
     if (safeCompare(bearer, expectedKey)) return next();
+
+    const monitorKey = process.env.MONITOR_API_KEY || '';
+    const monitorPaths = new Set(['/health', '/automation/daily-recovery']);
+    if (monitorKey && monitorPaths.has(req.path) && safeCompare(bearer, monitorKey)) return next();
   }
 
   // Check Basic Auth (dashboard passes Basic Auth to API on same origin)

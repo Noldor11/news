@@ -1,12 +1,13 @@
 import express from 'express';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import config from './config.js';
 import { initDb } from './db/index.js';
 import { apiAuth, clearDashboardSession, createDashboardSession, dashboardAuth, validateDashboardCredentials } from './middleware/auth.js';
-import healthRouter from './routes/health.js';
+import healthRouter, { healthDetailsRouter } from './routes/health.js';
 import articlesRouter from './routes/articles.js';
 import digestsRouter from './routes/digests.js';
 import telegramRouter from './routes/telegram.js';
@@ -20,6 +21,21 @@ const __dirname = dirname(__filename);
 
 const app = express();
 app.set('trust proxy', 1);
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+}));
 
 // Middleware
 app.use(express.json({ limit: '5mb' }));
@@ -139,6 +155,7 @@ app.use('/api/telegram', telegramRouter);
 app.use('/api', apiAuth, apiLimiter);
 
 // API routes with specific rate limits
+app.use('/api/health', healthDetailsRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/automation', automationRouter);
 app.use('/api/articles', articlesRouter);

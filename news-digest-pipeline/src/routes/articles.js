@@ -6,6 +6,7 @@ import {
   getDb,
 } from '../db/index.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
+import { safeErrorMessage } from '../security/redact.js';
 
 const router = Router();
 
@@ -49,11 +50,11 @@ router.post('/', async (req, res) => {
         if (!result.duplicate) {
           getDb().prepare(
             `UPDATE articles SET fetch_error = ?, updated_at = datetime('now') WHERE id = ?`
-          ).run(fetchErr.message, result.id);
+          ).run(safeErrorMessage(fetchErr, 'Content fetch failed'), result.id);
         }
         return res.status(201).json({
           ...result,
-          warning: `Content fetch failed: ${fetchErr.message}`,
+          warning: 'Content fetch failed',
         });
       }
     }
@@ -68,8 +69,8 @@ router.post('/', async (req, res) => {
       duplicate: result.duplicate || false,
     });
   } catch (err) {
-    console.error('[articles] POST / error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[articles] POST / error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -120,8 +121,8 @@ router.post('/batch', (req, res) => {
       results,
     });
   } catch (err) {
-    console.error('[articles] POST /batch error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[articles] POST /batch error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -145,8 +146,8 @@ router.get('/', (req, res) => {
 
     res.json(articles);
   } catch (err) {
-    console.error('[articles] GET / error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[articles] GET / error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -161,8 +162,8 @@ router.get('/stats', (req, res) => {
       total: getArticleCount(),
     });
   } catch (err) {
-    console.error('[articles] GET /stats error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[articles] GET /stats error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -210,8 +211,8 @@ router.patch('/:id', (req, res) => {
     const updated = db.prepare('SELECT * FROM articles WHERE id = ?').get(id);
     res.json(updated);
   } catch (err) {
-    console.error('[articles] PATCH /:id error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[articles] PATCH /:id error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -224,8 +225,8 @@ router.delete('/:id', (req, res) => {
     }
     res.status(204).end();
   } catch (err) {
-    console.error('[articles] DELETE error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[articles] DELETE error:', safeErrorMessage(err));
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

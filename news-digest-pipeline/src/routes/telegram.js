@@ -1,24 +1,32 @@
+import { createHash, timingSafeEqual } from 'crypto';
 import { Router } from 'express';
 import { handleTelegramUpdate } from '../services/telegram-bot.js';
 import config from '../config.js';
 
 const router = Router();
 
+function secretMatches(provided, expected) {
+  if (!provided || !expected) return false;
+  const providedHash = createHash('sha256').update(String(provided)).digest();
+  const expectedHash = createHash('sha256').update(String(expected)).digest();
+  return timingSafeEqual(providedHash, expectedHash);
+}
+
 router.post('/webhook', (req, res) => {
-  // Verify the secret token from Telegram header
   const secretToken = req.headers['x-telegram-bot-api-secret-token'];
-  if (config.telegramWebhookSecret && secretToken !== config.telegramWebhookSecret) {
+  if (!config.telegramWebhookSecret) {
+    console.error('[telegram] Webhook secret is not configured');
+    return res.sendStatus(503);
+  }
+  if (!secretMatches(secretToken, config.telegramWebhookSecret)) {
     console.warn('[telegram] Invalid secret token in webhook request');
     return res.sendStatus(403);
   }
 
-  // Respond immediately (Telegram requires fast response)
   res.sendStatus(200);
 
-  // Process update asynchronously
-  const update = req.body;
-  handleTelegramUpdate(update, config).catch((err) => {
-    console.error('[telegram] Error handling update:', err);
+  handleTelegramUpdate(req.body, config).catch(() => {
+    console.error('[telegram] Error handling update');
   });
 });
 
