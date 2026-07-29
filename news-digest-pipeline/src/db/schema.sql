@@ -61,7 +61,6 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
 CREATE INDEX IF NOT EXISTS idx_articles_url ON articles(url);
 CREATE INDEX IF NOT EXISTS idx_articles_digest_id ON articles(digest_id);
-CREATE INDEX IF NOT EXISTS idx_articles_event_fingerprint ON articles(event_fingerprint);
 CREATE INDEX IF NOT EXISTS idx_digests_date ON digests(date);
 CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
 CREATE INDEX IF NOT EXISTS idx_automation_runs_status ON automation_runs(status);
