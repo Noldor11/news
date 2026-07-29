@@ -6,6 +6,8 @@ import {
   scoreItem,
   selectCandidatesWithFallback,
   selectDiverseCandidates,
+  selectDiverseCandidatesDetailed,
+  titleSimilarity,
 } from './rss-digest-runner.js';
 
 const freshDate = new Date(Date.now() - 60 * 60 * 1000).toUTCString();
@@ -123,5 +125,148 @@ describe('RSS selection quality gates', () => {
       'https://a.example/fresh-2',
       'https://b.example/fresh-1',
     ]));
+  });
+
+  it('collapses the same Hugging Face incident reported by multiple outlets', () => {
+    const result = selectDiverseCandidatesDetailed([
+      baseItem({
+        url: 'https://theverge.example/hugging-face',
+        source: 'The Verge AI',
+        title: 'OpenAI rogue AI agent did not stop at hacking Hugging Face',
+        summary: 'The OpenAI agent that escaped containment and hacked Hugging Face also attacked other companies.',
+      }),
+      baseItem({
+        url: 'https://wired.example/hugging-face',
+        source: 'Wired AI',
+        title: 'OpenAI Rogue AI Agent Hacked More Than Just Hugging Face',
+        summary: 'OpenAI disclosed that the same rogue agent accessed Hugging Face and several other companies.',
+      }),
+      baseItem({
+        url: 'https://ars.example/hugging-face',
+        source: 'Ars Technica',
+        title: 'We now understand how OpenAI hacked into Hugging Face',
+        summary: 'The OpenAI model exploited a JFrog zero-day while breaching Hugging Face during evaluation.',
+      }),
+    ], { maxAgeHours: 36, maxPerSource: 3, limit: 10 });
+
+    expect(result.selected).toHaveLength(1);
+    expect(result.rejectedDuplicates).toHaveLength(2);
+    expect(result.rejectedDuplicates.every((item) => item.duplicateReason === 'same-batch-event')).toBe(true);
+  });
+
+  it('blocks a repackaged event found in the recent cross-day history', () => {
+    const prior = baseItem({
+      url: 'https://wired.example/original-hack',
+      title: 'OpenAI Models Escaped Containment and Hacked Hugging Face',
+      summary: 'Cybersecurity models escaped a sandbox and breached Hugging Face during an evaluation.',
+      eventFingerprint: 'existing-event',
+    });
+    const result = selectDiverseCandidatesDetailed([
+      baseItem({
+        url: 'https://techcrunch.example/followup',
+        title: 'How OpenAI human mistake led to the AI-powered hack on Hugging Face',
+        summary: 'A sandbox configuration mistake allowed an OpenAI agent to breach Hugging Face.',
+      }),
+    ], {
+      maxAgeHours: 36,
+      maxPerSource: 3,
+      limit: 10,
+      priorArticles: [prior],
+    });
+
+    expect(result.selected).toHaveLength(0);
+    expect(result.rejectedDuplicates[0]).toMatchObject({
+      duplicateReason: 'recent-event',
+      duplicateOf: prior.url,
+      eventFingerprint: 'existing-event',
+    });
+  });
+
+  it('keeps genuinely different Hugging Face events separate', () => {
+    const selected = selectDiverseCandidates([
+      baseItem({
+        url: 'https://security.example/hack',
+        title: 'OpenAI Models Escaped Containment and Hacked Hugging Face',
+        summary: 'An autonomous cybersecurity agent escaped a sandbox and breached production infrastructure.',
+      }),
+      baseItem({
+        url: 'https://safety.example/deepfakes',
+        title: 'Hugging Face Has a Deepfake Nudes Problem',
+        summary: 'Researchers found image editing models being used for nonconsensual explicit deepfakes.',
+      }),
+    ], { maxAgeHours: 36, maxPerSource: 3, limit: 10 });
+
+    expect(selected).toHaveLength(2);
+  });
+
+  it('collapses paraphrased deepfake and voice-mode reports', () => {
+    const deepfake = selectDiverseCandidates([
+      baseItem({
+        url: 'https://verge.example/deepfake',
+        title: 'Hugging Face is being used to easily undress women and children',
+        summary: 'AI researchers found nonconsensual explicit deepfakes made with popular image editing models.',
+      }),
+      baseItem({
+        url: 'https://wired.example/deepfake',
+        title: 'Hugging Face Has a Deepfake Nudes Problem',
+        summary: 'AI researchers tested image editors and produced nonconsensual deepfake nudes.',
+      }),
+    ], { maxAgeHours: 36, maxPerSource: 3, limit: 10 });
+    const voice = selectDiverseCandidates([
+      baseItem({
+        url: 'https://verge.example/voice',
+        title: 'Claude voice mode is now available for Opus and Sonnet',
+        summary: 'Anthropic expanded Claude voice mode to its Opus and Sonnet models.',
+      }),
+      baseItem({
+        url: 'https://techcrunch.example/voice',
+        title: 'Anthropic updates Claude voice mode with more capable models',
+        summary: 'Claude voice mode now supports the company newer Opus and Sonnet releases.',
+      }),
+    ], { maxAgeHours: 36, maxPerSource: 3, limit: 10 });
+
+    expect(deepfake).toHaveLength(1);
+    expect(voice).toHaveLength(1);
+  });
+
+  it('does not merge unrelated OpenAI product updates', () => {
+    const selected = selectDiverseCandidates([
+      baseItem({
+        url: 'https://example.com/health',
+        title: 'OpenAI makes ChatGPT Health available to all US users',
+        summary: 'ChatGPT Health provides a dedicated experience for medical questions and wellness records.',
+      }),
+      baseItem({
+        url: 'https://example.com/voice',
+        title: 'OpenAI new voice mode makes it to the ChatGPT desktop app',
+        summary: 'The desktop application received an updated real-time voice conversation interface.',
+      }),
+    ], { maxAgeHours: 36, maxPerSource: 3, limit: 10 });
+
+    expect(selected).toHaveLength(2);
+  });
+
+  it('does not merge separate tutorials that only share a platform name', () => {
+    const selected = selectDiverseCandidates([
+      baseItem({
+        url: 'https://aws.example/market-surveillance',
+        title: 'Market surveillance agent with LangGraph and Strands on AgentCore',
+        summary: 'A tutorial for building a financial market surveillance workflow.',
+      }),
+      baseItem({
+        url: 'https://aws.example/evaluating-agents',
+        title: 'Evaluating AI Agents: A production blueprint with Strands and AgentCore',
+        summary: 'A tutorial about evaluation and observability for production agents.',
+      }),
+    ], { maxAgeHours: 36, maxPerSource: 3, limit: 10 });
+
+    expect(selected).toHaveLength(2);
+  });
+
+  it('normalizes Cyrillic titles instead of disabling similarity checks', () => {
+    expect(titleSimilarity(
+      'Новая модель Claude получила голосовой режим',
+      'Модель Claude получила новый голосовой режим',
+    )).toBeGreaterThan(0.5);
   });
 });

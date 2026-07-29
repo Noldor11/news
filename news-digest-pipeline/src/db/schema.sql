@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS articles (
   fetch_error TEXT,
   source_chat_id TEXT,
   source_message_id TEXT,
+  event_fingerprint TEXT,
+  duplicate_of TEXT,
+  duplicate_reason TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (digest_id) REFERENCES digests(id)
@@ -58,6 +61,7 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
 CREATE INDEX IF NOT EXISTS idx_articles_url ON articles(url);
 CREATE INDEX IF NOT EXISTS idx_articles_digest_id ON articles(digest_id);
+CREATE INDEX IF NOT EXISTS idx_articles_event_fingerprint ON articles(event_fingerprint);
 CREATE INDEX IF NOT EXISTS idx_digests_date ON digests(date);
 CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
 CREATE INDEX IF NOT EXISTS idx_automation_runs_status ON automation_runs(status);

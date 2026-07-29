@@ -24,6 +24,16 @@ export function initDb(dbPath) {
   if (!articleCols.has('source_message_id')) {
     db.exec('ALTER TABLE articles ADD COLUMN source_message_id TEXT');
   }
+  if (!articleCols.has('event_fingerprint')) {
+    db.exec('ALTER TABLE articles ADD COLUMN event_fingerprint TEXT');
+  }
+  if (!articleCols.has('duplicate_of')) {
+    db.exec('ALTER TABLE articles ADD COLUMN duplicate_of TEXT');
+  }
+  if (!articleCols.has('duplicate_reason')) {
+    db.exec('ALTER TABLE articles ADD COLUMN duplicate_reason TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_articles_event_fingerprint ON articles(event_fingerprint)');
 
   // Token accounting + cost columns on digests (idempotent)
   const digestCols = new Set(db.prepare('PRAGMA table_info(digests)').all().map((c) => c.name));
@@ -73,7 +83,15 @@ export function getDb() {
   return db;
 }
 
-export function insertArticle({ url, title, content, source = 'extension', sourceChatId = null, sourceMessageId = null }) {
+export function insertArticle({
+  url,
+  title,
+  content,
+  source = 'extension',
+  sourceChatId = null,
+  sourceMessageId = null,
+  eventFingerprint = null,
+}) {
   const existing = db.prepare('SELECT id, url, title, source, status, digest_id FROM articles WHERE url = ?').get(url);
   if (existing) {
     return { ...existing, duplicate: true };
@@ -81,11 +99,51 @@ export function insertArticle({ url, title, content, source = 'extension', sourc
 
   const id = uuidv4();
   db.prepare(
-    `INSERT INTO articles (id, url, title, content, source, source_chat_id, source_message_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, url, title || null, content || null, source, sourceChatId, sourceMessageId);
+    `INSERT INTO articles (
+       id, url, title, content, source, source_chat_id, source_message_id, event_fingerprint
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    url,
+    title || null,
+    content || null,
+    source,
+    sourceChatId,
+    sourceMessageId,
+    eventFingerprint,
+  );
 
   return { id, url, title, status: 'new', duplicate: false };
+}
+
+export function recordDuplicateArticle({
+  url,
+  title,
+  content,
+  source = 'railway-rss',
+  eventFingerprint = null,
+  duplicateOf,
+  duplicateReason,
+}) {
+  const existing = db.prepare('SELECT id FROM articles WHERE url = ?').get(url);
+  if (existing) return { id: existing.id, recorded: false };
+
+  const id = uuidv4();
+  db.prepare(
+    `INSERT INTO articles (
+       id, url, title, content, source, status, event_fingerprint, duplicate_of, duplicate_reason
+     ) VALUES (?, ?, ?, ?, ?, 'duplicate', ?, ?, ?)`
+  ).run(
+    id,
+    url,
+    title || null,
+    content || null,
+    source,
+    eventFingerprint,
+    duplicateOf || null,
+    duplicateReason || null,
+  );
+  return { id, recorded: true };
 }
 
 export function getNewArticles(limit = 50) {

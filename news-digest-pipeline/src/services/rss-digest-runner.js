@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import config from '../config.js';
 import {
   deleteArticle,
@@ -5,6 +6,7 @@ import {
   getDb,
   getDigest,
   insertArticle,
+  recordDuplicateArticle,
   resetArticlesForRetry,
 } from '../db/index.js';
 import { generateDigest } from './digest-generator.js';
@@ -19,6 +21,7 @@ const DEFAULT_MAX_PER_SOURCE = 3;
 const DEFAULT_FETCH_RETRIES = 2;
 const FETCH_CANDIDATES = 80;
 const FEED_TIMEOUT_MS = 15000;
+const EVENT_HISTORY_DAYS = 10;
 
 const sources = [
   { name: 'TechCrunch AI', url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },
@@ -53,6 +56,36 @@ const nonTechTerms = [
 const titleStopWords = new Set([
   'a', 'an', 'and', 'are', 'as', 'at', 'by', 'for', 'from', 'in', 'into', 'is', 'it', 'of', 'on', 'or',
   'the', 'to', 'with', 'your', 'new', 'this', 'that', 'how', 'why', 'what', 'will', 'its', 'after', 'about',
+  'available', 'both', 'capable', 'compare', 'compared', 'first', 'here', 'made', 'make', 'makes',
+  'model', 'more', 'most', 'one',
+  'как', 'что', 'это', 'для', 'или', 'при', 'про', 'без', 'под', 'над', 'уже', 'еще', 'ещё', 'его', 'ее',
+  'её', 'они', 'она', 'оно', 'этот', 'эта', 'эти', 'который', 'которая', 'которые', 'после', 'перед',
+]);
+
+const tokenAliases = new Map([
+  ['hacked', 'hack'],
+  ['hacking', 'hack'],
+  ['hacks', 'hack'],
+  ['breached', 'breach'],
+  ['breaches', 'breach'],
+  ['models', 'model'],
+  ['agents', 'agent'],
+  ['systems', 'system'],
+  ['updates', 'update'],
+  ['updated', 'update'],
+  ['launches', 'launch'],
+  ['launched', 'launch'],
+  ['deepfakes', 'deepfake-abuse'],
+  ['deepfake', 'deepfake-abuse'],
+  ['nonconsensual', 'deepfake-abuse'],
+  ['nudes', 'deepfake-abuse'],
+  ['nude', 'deepfake-abuse'],
+  ['undress', 'deepfake-abuse'],
+]);
+
+const eventActionTokens = new Set([
+  'acquisition', 'ban', 'breach', 'deepfake-abuse', 'exploit', 'funding', 'hack', 'incident',
+  'launch', 'lawsuit', 'mode', 'release', 'security', 'update', 'vulnerability', 'voice',
 ]);
 
 function sleep(ms) {
@@ -103,26 +136,35 @@ export function resolveRssSettings(appConfig = config) {
   };
 }
 
-export function selectCandidatesWithFallback(items, settings, excludedUrls = new Set()) {
-  const select = (maxAgeHours) => selectDiverseCandidates(items, {
+export function selectCandidatesWithFallback(
+  items,
+  settings,
+  excludedUrls = new Set(),
+  priorArticles = [],
+) {
+  const select = (maxAgeHours) => selectDiverseCandidatesDetailed(items, {
     maxAgeHours,
     maxPerSource: settings.maxPerSource,
     limit: FETCH_CANDIDATES,
     excludedUrls,
+    priorArticles,
   });
 
   const primary = select(settings.maxAgeHours);
-  if (primary.length >= settings.hardMinArticles
+  if (primary.selected.length >= settings.hardMinArticles
       || settings.fallbackMaxAgeHours <= settings.maxAgeHours) {
     return {
-      candidates: primary,
+      candidates: primary.selected,
+      rejectedDuplicates: primary.rejectedDuplicates,
       fallbackUsed: false,
       effectiveMaxAgeHours: settings.maxAgeHours,
     };
   }
 
+  const fallback = select(settings.fallbackMaxAgeHours);
   return {
-    candidates: select(settings.fallbackMaxAgeHours),
+    candidates: fallback.selected,
+    rejectedDuplicates: fallback.rejectedDuplicates,
     fallbackUsed: true,
     effectiveMaxAgeHours: settings.fallbackMaxAgeHours,
   };
@@ -234,22 +276,73 @@ function titleTokens(title) {
   return new Set(
     String(title || '')
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
       .split(/\s+/)
+      .map((word) => tokenAliases.get(word) || word)
       .filter((word) => word.length > 2 && !titleStopWords.has(word))
   );
 }
 
-export function titleSimilarity(left, right) {
-  const a = titleTokens(left);
-  const b = titleTokens(right);
-  if (a.size === 0 || b.size === 0) return 0;
+function tokenSimilarity(a, b) {
+  if (a.size === 0 || b.size === 0) return { score: 0, shared: 0, sharedTokens: [] };
   let intersection = 0;
-  for (const word of a) if (b.has(word)) intersection += 1;
-  return intersection / (a.size + b.size - intersection);
+  const sharedTokens = [];
+  for (const word of a) {
+    if (!b.has(word)) continue;
+    intersection += 1;
+    sharedTokens.push(word);
+  }
+  return {
+    score: intersection / (a.size + b.size - intersection),
+    shared: intersection,
+    sharedTokens,
+  };
 }
 
-export function selectDiverseCandidates(items, settings = {}) {
+export function titleSimilarity(left, right) {
+  return tokenSimilarity(titleTokens(left), titleTokens(right)).score;
+}
+
+function eventTokens(item) {
+  return titleTokens([item.title, item.summary || item.content].filter(Boolean).join(' '));
+}
+
+export function eventSimilarity(left, right) {
+  const title = tokenSimilarity(titleTokens(left.title), titleTokens(right.title));
+  const combined = tokenSimilarity(eventTokens(left), eventTokens(right));
+  const sharesEventAction = title.sharedTokens.some((token) => eventActionTokens.has(token))
+    || combined.sharedTokens.some((token) => eventActionTokens.has(token));
+  const duplicate = title.score >= 0.42
+    || (sharesEventAction && title.shared >= 4 && title.score >= 0.33)
+    || (sharesEventAction && title.shared >= 3 && title.score >= 0.3)
+    || (sharesEventAction && title.shared >= 3 && combined.score >= 0.28)
+    || (sharesEventAction && title.shared >= 2 && combined.score >= 0.4);
+  return {
+    duplicate,
+    score: Math.max(title.score, combined.score),
+    titleScore: title.score,
+    combinedScore: combined.score,
+    sharedTitleTokens: title.shared,
+    sharesEventAction,
+  };
+}
+
+export function buildEventFingerprint(item) {
+  const normalized = [...eventTokens(item)].sort().slice(0, 16).join('|');
+  return createHash('sha256').update(normalized || String(item.url || '')).digest('hex').slice(0, 24);
+}
+
+function findEventDuplicate(item, references) {
+  let best = null;
+  for (const reference of references) {
+    const similarity = eventSimilarity(item, reference);
+    if (!similarity.duplicate || (best && best.similarity.score >= similarity.score)) continue;
+    best = { reference, similarity };
+  }
+  return best;
+}
+
+export function selectDiverseCandidatesDetailed(items, settings = {}) {
   const maxAgeHours = settings.maxAgeHours || DEFAULT_MAX_AGE_HOURS;
   const maxPerSource = settings.maxPerSource || DEFAULT_MAX_PER_SOURCE;
   const limit = settings.limit || FETCH_CANDIDATES;
@@ -258,6 +351,8 @@ export function selectDiverseCandidates(items, settings = {}) {
     : new Set(settings.excludedUrls || []);
   const seenUrls = new Set();
   const selected = [];
+  const rejectedDuplicates = [];
+  const priorArticles = Array.isArray(settings.priorArticles) ? settings.priorArticles : [];
   const sourceCounts = new Map();
 
   const ranked = items
@@ -268,14 +363,32 @@ export function selectDiverseCandidates(items, settings = {}) {
   for (const item of ranked) {
     if (selected.length >= limit || seenUrls.has(item.url) || excludedUrls.has(item.url)) continue;
     if ((sourceCounts.get(item.source) || 0) >= maxPerSource) continue;
-    if (selected.some((chosen) => titleSimilarity(chosen.title, item.title) >= 0.7)) continue;
+    const match = findEventDuplicate(item, [...priorArticles, ...selected]);
+    if (match) {
+      rejectedDuplicates.push({
+        ...item,
+        duplicateOf: match.reference.url,
+        duplicateReason: priorArticles.includes(match.reference)
+          ? 'recent-event'
+          : 'same-batch-event',
+        eventFingerprint: match.reference.eventFingerprint
+          || match.reference.event_fingerprint
+          || buildEventFingerprint(match.reference),
+        similarity: match.similarity,
+      });
+      continue;
+    }
 
     seenUrls.add(item.url);
     sourceCounts.set(item.source, (sourceCounts.get(item.source) || 0) + 1);
-    selected.push(item);
+    selected.push({ ...item, eventFingerprint: buildEventFingerprint(item) });
   }
 
-  return selected;
+  return { selected, rejectedDuplicates };
+}
+
+export function selectDiverseCandidates(items, settings = {}) {
+  return selectDiverseCandidatesDetailed(items, settings).selected;
 }
 
 async function fetchFeedOnce(source) {
@@ -309,7 +422,7 @@ async function fetchFeed(source, retries) {
   throw lastError;
 }
 
-async function collectCandidates(settings, excludedUrls = new Set()) {
+async function collectCandidates(settings, excludedUrls = new Set(), priorArticles = []) {
   const sourceErrors = [];
   const feedResults = await Promise.all(sources.map(async (source) => {
     try {
@@ -320,10 +433,11 @@ async function collectCandidates(settings, excludedUrls = new Set()) {
     }
   }));
 
-  const { candidates, fallbackUsed, effectiveMaxAgeHours } = selectCandidatesWithFallback(
+  const { candidates, rejectedDuplicates, fallbackUsed, effectiveMaxAgeHours } = selectCandidatesWithFallback(
     feedResults.flat(),
     settings,
     excludedUrls,
+    priorArticles,
   );
 
   const publicationMode = classifyArticleCount(candidates.length, settings);
@@ -336,7 +450,14 @@ async function collectCandidates(settings, excludedUrls = new Set()) {
     );
   }
 
-  return { candidates, sourceErrors, publicationMode, fallbackUsed, effectiveMaxAgeHours };
+  return {
+    candidates,
+    rejectedDuplicates,
+    sourceErrors,
+    publicationMode,
+    fallbackUsed,
+    effectiveMaxAgeHours,
+  };
 }
 
 function getArticlesByIds(db, ids) {
@@ -352,9 +473,10 @@ function canReuseArticle(article) {
     && ['new', 'error'].includes(article.status);
 }
 
-function getExcludedArticleUrls(db) {
+function getDedupHistory(db) {
   const existing = db.prepare(
-    `SELECT url, source, status, digest_id
+    `SELECT id, url, title, content, source, status, digest_id,
+            event_fingerprint, created_at
      FROM articles
      WHERE url IS NOT NULL`,
   ).all();
@@ -362,9 +484,22 @@ function getExcludedArticleUrls(db) {
   // Failed, unattached RSS entries remain retryable. All other URLs are
   // excluded before diversity caps, so former top stories cannot crowd out
   // newer candidates from the same source.
-  return new Set(existing
+  const excludedUrls = new Set(existing
     .filter((article) => !canReuseArticle(article))
     .map((article) => article.url));
+
+  const priorArticles = existing
+    .filter((article) => article.source === 'railway-rss'
+      && article.digest_id
+      && article.status === 'used'
+      && Date.parse(`${article.created_at}Z`) >= Date.now() - EVENT_HISTORY_DAYS * 86400000)
+    .map((article) => ({
+      ...article,
+      summary: article.content || '',
+      eventFingerprint: article.event_fingerprint,
+    }));
+
+  return { excludedUrls, priorArticles };
 }
 
 /**
@@ -374,11 +509,24 @@ function getExcludedArticleUrls(db) {
 export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
   const settings = resolveRssSettings();
   const db = getDb();
-  const excludedUrls = getExcludedArticleUrls(db);
-  const { candidates, sourceErrors, publicationMode: collectedMode, fallbackUsed, effectiveMaxAgeHours } = await collectCandidates(settings, excludedUrls);
+  const { excludedUrls, priorArticles } = getDedupHistory(db);
+  const {
+    candidates,
+    rejectedDuplicates,
+    sourceErrors,
+    publicationMode: collectedMode,
+    fallbackUsed,
+    effectiveMaxAgeHours,
+  } = await collectCandidates(settings, excludedUrls, priorArticles);
+  const duplicateReasons = rejectedDuplicates.reduce((counts, item) => {
+    counts[item.duplicateReason] = (counts[item.duplicateReason] || 0) + 1;
+    return counts;
+  }, {});
   if (onProgress) {
     await onProgress('collected', {
       candidateCount: candidates.length,
+      semanticDuplicateCount: rejectedDuplicates.length,
+      duplicateReasons,
       sourceErrorCount: sourceErrors.length,
       publicationMode: collectedMode,
       fallbackUsed,
@@ -387,7 +535,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
   }
   const selectedArticleIds = [];
   const insertedArticleIds = [];
-  let duplicates = 0;
+  let exactDuplicates = 0;
   let reused = 0;
 
   for (const item of candidates) {
@@ -404,10 +552,11 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
       title: item.title,
       content,
       source: 'railway-rss',
+      eventFingerprint: item.eventFingerprint,
     });
 
     if (result.duplicate) {
-      duplicates += 1;
+      exactDuplicates += 1;
       if (canReuseArticle(result) && !selectedArticleIds.includes(result.id)) {
         if (result.status === 'error') resetArticlesForRetry([result.id]);
         selectedArticleIds.push(result.id);
@@ -421,12 +570,19 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
   }
 
   const selectedMode = classifyArticleCount(selectedArticleIds.length, settings);
+  const duplicates = exactDuplicates + rejectedDuplicates.length;
   if (selectedMode === 'insufficient') {
     for (const articleId of insertedArticleIds) deleteArticle(articleId);
     throw new InsufficientArticlesError(
       'Only ' + selectedArticleIds.length + ' new or safely retryable articles were available; '
       + 'hard floor is ' + settings.hardMinArticles + '. Duplicates: ' + duplicates + '.',
-      { selectedCount: selectedArticleIds.length, duplicates, publicationMode: selectedMode },
+      {
+        selectedCount: selectedArticleIds.length,
+        duplicates,
+        semanticDuplicates: rejectedDuplicates.length,
+        duplicateReasons,
+        publicationMode: selectedMode,
+      },
     );
   }
 
@@ -444,6 +600,8 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
       candidateCount: candidates.length,
       selectedCount: articles.length,
       duplicates,
+      semanticDuplicates: rejectedDuplicates.length,
+      duplicateReasons,
       reused,
       publicationMode: articleMode,
     });
@@ -469,6 +627,25 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
     );
   }
 
+  let recordedDuplicates = 0;
+  for (const item of rejectedDuplicates) {
+    const content = [
+      `Заголовок: ${item.title}`,
+      `Источник: ${item.source}`,
+      `Краткое описание: ${item.summary}`,
+    ].join('\n\n').slice(0, 6000);
+    const recorded = recordDuplicateArticle({
+      url: item.url,
+      title: item.title,
+      content,
+      source: 'railway-rss',
+      eventFingerprint: item.eventFingerprint,
+      duplicateOf: item.duplicateOf,
+      duplicateReason: item.duplicateReason,
+    });
+    if (recorded.recorded) recordedDuplicates += 1;
+  }
+
   // Keep successful digest articles attached, but retry only the model failures
   // on a later run instead of leaving them permanently in the error state.
   const failedArticleIds = getArticlesByIds(db, selectedArticleIds)
@@ -484,6 +661,10 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
     collected: candidates.length,
     selected: articles.length,
     duplicates,
+    exactDuplicates,
+    semanticDuplicates: rejectedDuplicates.length,
+    duplicateReasons,
+    recordedDuplicates,
     reused,
     modelRetriesQueued: failedArticleIds.length,
     publicationMode: digestMode,

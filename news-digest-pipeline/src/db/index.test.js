@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   claimAutomationRun,
+  getDb,
   getAutomationRun,
   getAutomationRunByKey,
   initDb,
+  recordDuplicateArticle,
   updateAutomationRun,
 } from './index.js';
 
@@ -66,6 +68,32 @@ describeWithNativeDatabase('automation run lock', () => {
       digest_id: 'digest-safe-to-retry',
       attempts: 2,
       error: null,
+    });
+  });
+});
+
+describeWithNativeDatabase('article duplicate audit fields', () => {
+  beforeEach(() => {
+    initDb(':memory:');
+  });
+
+  it('records a rejected event without returning it to the new article queue', () => {
+    const result = recordDuplicateArticle({
+      url: 'https://example.com/repackaged-story',
+      title: 'Repackaged story',
+      content: 'The same event from another source.',
+      eventFingerprint: 'event-123',
+      duplicateOf: 'https://example.com/original-story',
+      duplicateReason: 'recent-event',
+    });
+    const stored = getDb().prepare('SELECT * FROM articles WHERE id = ?').get(result.id);
+
+    expect(result.recorded).toBe(true);
+    expect(stored).toMatchObject({
+      status: 'duplicate',
+      event_fingerprint: 'event-123',
+      duplicate_of: 'https://example.com/original-story',
+      duplicate_reason: 'recent-event',
     });
   });
 });
