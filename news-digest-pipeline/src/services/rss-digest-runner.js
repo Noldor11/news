@@ -12,10 +12,11 @@ import {
 import { generateDigest } from './digest-generator.js';
 import { publishDigest } from './publishers/index.js';
 
-const DEFAULT_MIN_ARTICLES = 20;
+const DEFAULT_MIN_ARTICLES = 23;
 const DEFAULT_HARD_MIN_ARTICLES = 8;
-const DEFAULT_MAX_ARTICLES = 22;
+const DEFAULT_MAX_ARTICLES = 25;
 const DEFAULT_GADGET_ARTICLES = 5;
+const DEFAULT_MARKETPLACE_ARTICLES = 1;
 const DEFAULT_MAX_AGE_HOURS = 36;
 const DEFAULT_FALLBACK_MAX_AGE_HOURS = 72;
 const DEFAULT_MAX_PER_SOURCE = 3;
@@ -41,6 +42,9 @@ const sources = [
   { name: 'TechCrunch Gadgets', category: 'gadgets', url: 'https://techcrunch.com/category/gadgets/feed/' },
   { name: 'Ars Technica Gear & Gadgets', category: 'gadgets', url: 'https://feeds.arstechnica.com/arstechnica/gadgets' },
   { name: 'The Verge Gadgets', category: 'gadgets', url: 'https://www.theverge.com/rss/gadgets/index.xml' },
+  { name: 'Upwork News', category: 'upwork', url: 'https://investors.upwork.com/rss/news-releases.xml' },
+  { name: 'Fiverr News', category: 'fiverr', url: 'https://investors.fiverr.com/rss/news-releases.xml' },
+  { name: 'LinkedIn Pressroom', category: 'linkedin', format: 'linkedin-pressroom', url: 'https://news.linkedin.com/' },
 ];
 
 const techTerms = [
@@ -54,6 +58,12 @@ const gadgetTerms = [
   'gadget', 'device', 'hardware', 'smartphone', 'phone', 'laptop', 'tablet', 'wearable', 'smartwatch',
   'earbuds', 'headphones', 'camera', 'drone', 'smart home', 'robot vacuum', 'foldable', 'vr', 'ar',
   'consumer electronics',
+];
+
+const marketplaceTerms = [
+  'upwork', 'fiverr', 'linkedin', 'freelance', 'freelancer', 'freelancing', 'talent marketplace',
+  'talent', 'client', 'contractor', 'gig', 'gigs', 'hiring', 'job search', 'professional network',
+  'professional', 'workforce', 'creator economy', 'proposal', 'connects',
 ];
 
 const nonTechTerms = [
@@ -148,6 +158,12 @@ export function resolveRssSettings(appConfig = config) {
       0,
       maxArticles,
     ),
+    marketplaceArticlesPerDigest: clampInteger(
+      appConfig.marketplaceArticlesPerDigest,
+      DEFAULT_MARKETPLACE_ARTICLES,
+      0,
+      maxArticles,
+    ),
     fetchRetries: clampInteger(appConfig.rssFetchRetries, DEFAULT_FETCH_RETRIES, 0, 5),
   };
 }
@@ -163,6 +179,7 @@ export function selectCandidatesWithFallback(
     maxPerSource: settings.maxPerSource,
     limit: FETCH_CANDIDATES,
     gadgetArticlesPerDigest: settings.gadgetArticlesPerDigest,
+    marketplaceArticlesPerDigest: settings.marketplaceArticlesPerDigest,
     excludedUrls,
     priorArticles,
   });
@@ -275,6 +292,42 @@ function parseFeed(xml, source) {
   }).filter((item) => item.title && item.url && item.summary.length >= 80);
 }
 
+function readClassTag(block, tagName, className) {
+  const match = block.match(new RegExp(
+    `<${tagName}\\b[^>]*\\bclass=["'][^"']*\\b${className}\\b[^"']*["'][^>]*>([\\s\\S]*?)<\\/${tagName}>`,
+    'i',
+  ));
+  return match ? decodeXml(match[1]).trim() : '';
+}
+
+export function parseLinkedInPressroom(html, source = { name: 'LinkedIn Pressroom', category: 'linkedin', url: 'https://news.linkedin.com/' }) {
+  const sourceName = typeof source === 'string' ? source : source.name;
+  const category = typeof source === 'string' ? 'linkedin' : (source.category || 'linkedin');
+  const baseUrl = typeof source === 'string' ? 'https://news.linkedin.com/' : source.url;
+  const blocks = [
+    ...(html.match(/<article\b[\s\S]*?<\/article>/gi) || []),
+    ...(html.match(/<li\b[^>]*\bcmp-post-list__item\b[\s\S]*?<\/li>/gi) || []),
+  ];
+
+  return blocks.map((block) => {
+    const headline = block.match(
+      /<a\b(?=[^>]*\b(?:post-headline|cmp-post-card__title-link)\b)(?=[^>]*\bhref=["']([^"']+)["'])[^>]*>([\s\S]*?)<\/a>/i,
+    );
+    if (!headline) return null;
+    const rawUrl = headline[1];
+    const url = normalizeUrl(new URL(rawUrl, baseUrl).toString());
+    const title = stripHtml(headline[2]);
+    const summary = stripHtml(
+      readClassTag(block, 'p', 'post-summary')
+      || readClassTag(block, 'p', 'cmp-post-card__description'),
+    );
+    const publishedAt = readAttr(block, 'time', 'datetime')
+      || stripHtml(readClassTag(block, 'time', 'date'))
+      || stripHtml(readClassTag(block, 'time', 'cmp-post-card__date'));
+    return { title, url, summary, publishedAt, source: sourceName, category };
+  }).filter((item) => item && item.title && item.url && item.summary.length >= 80);
+}
+
 export function scoreItem(item, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
   const text = [item.title, item.summary, item.source].join(' ').toLowerCase();
   const category = item.category || item.feedCategory || 'ai-tech';
@@ -282,7 +335,10 @@ export function scoreItem(item, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
   const gadgetScore = category === 'gadgets'
     ? gadgetTerms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0)
     : 0;
-  const techScore = baseTechScore + gadgetScore;
+  const marketplaceScore = ['upwork', 'fiverr', 'linkedin'].includes(category)
+    ? marketplaceTerms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0)
+    : 0;
+  const techScore = baseTechScore + gadgetScore + marketplaceScore;
   const nonTechScore = nonTechTerms.reduce((sum, term) => sum + (text.includes(term) ? 4 : 0), 0);
   const timestamp = Date.parse(item.publishedAt);
   const ageHours = Number.isNaN(timestamp) ? maxAgeHours + 1 : Math.max(0, (Date.now() - timestamp) / 3600000);
@@ -292,6 +348,7 @@ export function scoreItem(item, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
     ageHours,
     techScore,
     gadgetScore,
+    marketplaceScore,
     nonTechScore,
     category,
   };
@@ -427,37 +484,61 @@ export function isGadgetItem(item) {
 }
 
 /**
- * Reserve the requested number of gadget candidates before filling the rest
- * from the general AI/tech pool. Both pools share the same duplicate history.
+ * Reserve the requested candidates for each configured lane before filling
+ * the remaining slots from the general AI/tech pool.
  */
 export function selectDigestCandidatesDetailed(items, settings = {}) {
   const limit = settings.limit || FETCH_CANDIDATES;
-  const gadgetLimit = clampInteger(
-    settings.gadgetArticlesPerDigest,
-    0,
-    0,
-    limit,
-  );
-  if (gadgetLimit === 0) return selectDiverseCandidatesDetailed(items, settings);
+  const laneTargets = [
+    {
+      category: 'gadgets',
+      target: clampInteger(settings.gadgetArticlesPerDigest, DEFAULT_GADGET_ARTICLES, 0, limit),
+    },
+    ...['upwork', 'fiverr', 'linkedin'].map((category) => ({
+      category,
+      target: clampInteger(
+        settings.marketplaceArticlesPerDigest,
+        DEFAULT_MARKETPLACE_ARTICLES,
+        0,
+        limit,
+      ),
+    })),
+  ].filter((lane) => lane.target > 0);
 
-  const gadgetItems = items.filter(isGadgetItem);
-  const coreItems = items.filter((item) => !isGadgetItem(item));
-  const gadgetResult = selectDiverseCandidatesDetailed(gadgetItems, {
-    ...settings,
-    limit: gadgetLimit,
-  });
-  const coreLimit = limit - gadgetResult.selected.length;
-  const coreResult = coreLimit > 0
+  if (laneTargets.length === 0) return selectDiverseCandidatesDetailed(items, settings);
+
+  const selected = [];
+  const rejectedDuplicates = [];
+  const activeLaneCategories = new Set(laneTargets.map((lane) => lane.category));
+  let remaining = limit;
+  let priorArticles = [...(settings.priorArticles || [])];
+
+  for (const lane of laneTargets) {
+    if (remaining <= 0) break;
+    const laneItems = items.filter((item) => (item.category || item.feedCategory || 'ai-tech') === lane.category);
+    const laneResult = selectDiverseCandidatesDetailed(laneItems, {
+      ...settings,
+      limit: Math.min(lane.target, remaining),
+      priorArticles,
+    });
+    selected.push(...laneResult.selected);
+    rejectedDuplicates.push(...laneResult.rejectedDuplicates);
+    remaining -= laneResult.selected.length;
+    priorArticles = [...priorArticles, ...laneResult.selected];
+  }
+
+  const coreItems = items.filter((item) => !activeLaneCategories.has(item.category || item.feedCategory || 'ai-tech'));
+  const coreResult = remaining > 0
     ? selectDiverseCandidatesDetailed(coreItems, {
       ...settings,
-      limit: coreLimit,
-      priorArticles: [...(settings.priorArticles || []), ...gadgetResult.selected],
+      limit: remaining,
+      priorArticles,
     })
     : { selected: [], rejectedDuplicates: [] };
 
   return {
-    selected: [...gadgetResult.selected, ...coreResult.selected],
-    rejectedDuplicates: [...gadgetResult.rejectedDuplicates, ...coreResult.rejectedDuplicates],
+    selected: [...selected, ...coreResult.selected],
+    rejectedDuplicates: [...rejectedDuplicates, ...coreResult.rejectedDuplicates],
   };
 }
 
@@ -473,7 +554,10 @@ async function fetchFeedOnce(source) {
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return parseFeed(await response.text(), source);
+    const body = await response.text();
+    return source.format === 'linkedin-pressroom'
+      ? parseLinkedInPressroom(body, source)
+      : parseFeed(body, source);
   } finally {
     clearTimeout(timer);
   }
@@ -513,7 +597,7 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
   const publicationMode = classifyArticleCount(candidates.length, settings);
   if (publicationMode === 'insufficient') {
     throw new InsufficientArticlesError(
-      'Only ' + candidates.length + ' fresh, diverse AI/tech and gadget candidates were collected; '
+      'Only ' + candidates.length + ' fresh, diverse AI/tech, gadget, and platform candidates were collected; '
       + 'hard floor is ' + settings.hardMinArticles + '. Source errors: '
       + (sourceErrors.join('; ') || 'none'),
       { candidateCount: candidates.length, sourceErrors, publicationMode, fallbackUsed, effectiveMaxAgeHours },

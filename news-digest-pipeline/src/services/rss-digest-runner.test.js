@@ -3,6 +3,7 @@ import {
   classifyArticleCount,
   isGadgetItem,
   isFreshTechItem,
+  parseLinkedInPressroom,
   resolveRssSettings,
   scoreItem,
   selectDigestCandidatesDetailed,
@@ -23,12 +24,13 @@ const baseItem = (overrides = {}) => ({
 });
 
 describe('RSS selection quality gates', () => {
-  it('uses the 20-22 article policy with five gadget slots by default', () => {
+  it('uses the 23-25 article policy with five gadget and one platform slot by default', () => {
     expect(resolveRssSettings({})).toMatchObject({
-      minArticles: 20,
+      minArticles: 23,
       hardMinArticles: 8,
-      maxArticles: 22,
+      maxArticles: 25,
       gadgetArticlesPerDigest: 5,
+      marketplaceArticlesPerDigest: 1,
       maxAgeHours: 36,
       fallbackMaxAgeHours: 72,
       maxPerSource: 3,
@@ -36,15 +38,15 @@ describe('RSS selection quality gates', () => {
     });
   });
 
-  it('publishes 8-19 items as degraded instead of dropping the whole day', () => {
+  it('publishes 8-22 items as degraded instead of dropping the whole day', () => {
     const settings = resolveRssSettings({
-      minArticlesPerDigest: 20,
+      minArticlesPerDigest: 23,
       hardMinArticlesPerDigest: 8,
-      maxArticlesPerDigest: 22,
+      maxArticlesPerDigest: 25,
     });
 
-    expect(classifyArticleCount(22, settings)).toBe('full');
-    expect(classifyArticleCount(19, settings)).toBe('degraded');
+    expect(classifyArticleCount(25, settings)).toBe('full');
+    expect(classifyArticleCount(22, settings)).toBe('degraded');
     expect(classifyArticleCount(7, settings)).toBe('insufficient');
   });
 
@@ -136,6 +138,65 @@ describe('RSS selection quality gates', () => {
     expect(result.selected.slice(0, 5).every(isGadgetItem)).toBe(true);
     expect(result.selected.filter(isGadgetItem)).toHaveLength(5);
   });
+
+  it('reserves one Upwork, Fiverr, and LinkedIn slot before filling core news', () => {
+    const platformItems = [
+      ['upwork', 'Upwork expands its freelance talent marketplace', 'Upwork News'],
+      ['fiverr', 'Fiverr reports new demand for freelance services', 'Fiverr News'],
+      ['linkedin', 'LinkedIn adds new tools for professional networking', 'LinkedIn Pressroom'],
+    ].map(([category, title, source], index) => baseItem({
+      category,
+      source,
+      title,
+      summary: title + ' describes a distinct platform update with product, workforce, and marketplace details for professionals and clients.',
+      url: 'https://platforms.example/' + index,
+    }));
+    const coreTopics = [
+      ['OpenAI launches a coding model', 'OpenAI announced a coding model with developer tooling and API controls for software teams.'],
+      ['Anthropic publishes a safety evaluation', 'Anthropic published a safety evaluation covering model behavior, testing, and enterprise deployment controls.'],
+      ['NVIDIA unveils a new data center GPU', 'NVIDIA presented a data center GPU with new hardware and machine learning performance details.'],
+      ['Google demonstrates a robotics platform', 'Google demonstrated a robotics platform with new simulation and control methods for physical agents.'],
+      ['AWS expands its machine learning service', 'AWS expanded a machine learning service with new cloud infrastructure and deployment capabilities.'],
+      ['Hugging Face adds an evaluation tool', 'Hugging Face added an evaluation tool for comparing models, datasets, and developer workflows.'],
+    ];
+    const core = coreTopics.map(([title, summary], index) => baseItem({
+      title,
+      summary,
+      url: 'https://ai.example/' + index,
+    }));
+
+    const result = selectDigestCandidatesDetailed([...platformItems, ...core], {
+      maxAgeHours: 36,
+      maxPerSource: 3,
+      limit: 9,
+      gadgetArticlesPerDigest: 0,
+      marketplaceArticlesPerDigest: 1,
+    });
+
+    expect(result.selected.length).toBeGreaterThanOrEqual(6);
+    expect(result.selected.length).toBeLessThanOrEqual(9);
+    expect(result.selected.filter((item) => item.category === 'upwork')).toHaveLength(1);
+    expect(result.selected.filter((item) => item.category === 'fiverr')).toHaveLength(1);
+    expect(result.selected.filter((item) => item.category === 'linkedin')).toHaveLength(1);
+  });
+
+  it('parses LinkedIn Pressroom cards into normal article candidates', () => {
+    const html = [
+      '<ul><li class="cmp-post-list__item"><div class="cmp-post-card__content">',
+      '<h3 class="cmp-post-card__title"><a class="cmp-post-card__title-link" href="/2026/linkedin-ai-tools">LinkedIn adds AI tools for professional teams</a></h3>',
+      '<p class="cmp-post-card__byline"><time datetime="2026-08-01T01:30:00-07:00">Aug 1, 2026</time></p>',
+      '<p class="cmp-post-card__description">LinkedIn announced new AI tools that help professional teams organize work, discover relevant expertise, and make better decisions across the network.</p>',
+      '</div></li></ul>',
+    ].join('');
+
+    expect(parseLinkedInPressroom(html)).toMatchObject([{
+      title: 'LinkedIn adds AI tools for professional teams',
+      url: 'https://news.linkedin.com/2026/linkedin-ai-tools',
+      category: 'linkedin',
+      publishedAt: '2026-08-01T01:30:00-07:00',
+    }]);
+  });
+
   it('excludes already used URLs before applying source caps', () => {
     const selected = selectDiverseCandidates([
       baseItem({ url: 'https://a.example/used-1', title: 'OpenAI announces a new model', source: 'Source A' }),
