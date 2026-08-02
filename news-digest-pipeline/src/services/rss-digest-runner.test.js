@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyArticleCount,
+  isGadgetItem,
   isFreshTechItem,
   resolveRssSettings,
   scoreItem,
+  selectDigestCandidatesDetailed,
   selectCandidatesWithFallback,
   selectDiverseCandidates,
   selectDiverseCandidatesDetailed,
@@ -21,11 +23,12 @@ const baseItem = (overrides = {}) => ({
 });
 
 describe('RSS selection quality gates', () => {
-  it('uses the 15-17 fresh article policy by default', () => {
+  it('uses the 20-22 article policy with five gadget slots by default', () => {
     expect(resolveRssSettings({})).toMatchObject({
-      minArticles: 15,
+      minArticles: 20,
       hardMinArticles: 8,
-      maxArticles: 17,
+      maxArticles: 22,
+      gadgetArticlesPerDigest: 5,
       maxAgeHours: 36,
       fallbackMaxAgeHours: 72,
       maxPerSource: 3,
@@ -33,15 +36,15 @@ describe('RSS selection quality gates', () => {
     });
   });
 
-  it('publishes 8-14 items as degraded instead of dropping the whole day', () => {
+  it('publishes 8-19 items as degraded instead of dropping the whole day', () => {
     const settings = resolveRssSettings({
-      minArticlesPerDigest: 15,
+      minArticlesPerDigest: 20,
       hardMinArticlesPerDigest: 8,
-      maxArticlesPerDigest: 17,
+      maxArticlesPerDigest: 22,
     });
 
-    expect(classifyArticleCount(17, settings)).toBe('full');
-    expect(classifyArticleCount(13, settings)).toBe('degraded');
+    expect(classifyArticleCount(22, settings)).toBe('full');
+    expect(classifyArticleCount(19, settings)).toBe('degraded');
     expect(classifyArticleCount(7, settings)).toBe('insufficient');
   });
 
@@ -98,6 +101,40 @@ describe('RSS selection quality gates', () => {
     expect(selected.filter((item) => ['https://a.example/1', 'https://a.example/2'].includes(item.url))).toHaveLength(1);
     expect(selected.filter((item) => item.source === 'Source A')).toHaveLength(2);
     expect(selected).toHaveLength(4);
+  });
+
+  it('reserves five gadget slots before filling the remaining digest', () => {
+    const gadgetTopics = [
+      ['Foldable OLED display enters production', 'Source Gadgets A'],
+      ['Quadcopter camera gets a new flight controller', 'Source Gadgets B'],
+      ['Sleep tracking smartwatch adds blood oxygen sensors', 'Source Gadgets C'],
+      ['Noise cancelling earbuds ship with a new codec', 'Source Gadgets A'],
+      ['Portable photo printer cuts its paper waste', 'Source Gadgets B'],
+    ];
+    const gadgets = gadgetTopics.map(([title, source], index) => baseItem({
+      category: 'gadgets',
+      source,
+      title,
+      summary: `${title} is a distinct consumer electronics announcement with separate product specifications and availability details for users.`,
+      url: `https://gadgets.example/${index}`,
+    }));
+    const core = [
+      baseItem({ title: 'OpenAI launches a coding model', summary: 'OpenAI announced a coding model with an API and developer tooling for software teams.', url: 'https://ai.example/1' }),
+      baseItem({ title: 'Anthropic hardens Claude security controls', summary: 'Anthropic described new security controls for enterprise Claude deployments and access management.', url: 'https://ai.example/2' }),
+      baseItem({ title: 'NVIDIA unveils a GPU architecture', summary: 'NVIDIA presented a GPU architecture focused on data center performance and machine learning workloads.', url: 'https://ai.example/3' }),
+      baseItem({ title: 'Google demonstrates a robotics research platform', summary: 'Google shared a robotics platform for training physical agents with new simulation and control methods.', url: 'https://ai.example/4' }),
+    ];
+
+    const result = selectDigestCandidatesDetailed([...core, ...gadgets], {
+      maxAgeHours: 36,
+      maxPerSource: 3,
+      limit: 8,
+      gadgetArticlesPerDigest: 5,
+    });
+
+    expect(result.selected).toHaveLength(8);
+    expect(result.selected.slice(0, 5).every(isGadgetItem)).toBe(true);
+    expect(result.selected.filter(isGadgetItem)).toHaveLength(5);
   });
   it('excludes already used URLs before applying source caps', () => {
     const selected = selectDiverseCandidates([

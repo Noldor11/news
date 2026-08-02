@@ -12,9 +12,10 @@ import {
 import { generateDigest } from './digest-generator.js';
 import { publishDigest } from './publishers/index.js';
 
-const DEFAULT_MIN_ARTICLES = 15;
+const DEFAULT_MIN_ARTICLES = 20;
 const DEFAULT_HARD_MIN_ARTICLES = 8;
-const DEFAULT_MAX_ARTICLES = 17;
+const DEFAULT_MAX_ARTICLES = 22;
+const DEFAULT_GADGET_ARTICLES = 5;
 const DEFAULT_MAX_AGE_HOURS = 36;
 const DEFAULT_FALLBACK_MAX_AGE_HOURS = 72;
 const DEFAULT_MAX_PER_SOURCE = 3;
@@ -37,6 +38,9 @@ const sources = [
   { name: 'AWS Machine Learning', url: 'https://aws.amazon.com/blogs/machine-learning/feed/' },
   { name: 'ZDNet AI', url: 'https://www.zdnet.com/topic/artificial-intelligence/rss.xml' },
   { name: 'IEEE Spectrum AI', url: 'https://spectrum.ieee.org/feeds/topic/artificial-intelligence.rss' },
+  { name: 'TechCrunch Gadgets', category: 'gadgets', url: 'https://techcrunch.com/category/gadgets/feed/' },
+  { name: 'Ars Technica Gear & Gadgets', category: 'gadgets', url: 'https://feeds.arstechnica.com/arstechnica/gadgets' },
+  { name: 'The Verge Gadgets', category: 'gadgets', url: 'https://www.theverge.com/rss/gadgets/index.xml' },
 ];
 
 const techTerms = [
@@ -44,6 +48,12 @@ const techTerms = [
   'agent', 'model', 'robot', 'robotics', 'automation', 'software', 'coding', 'cybersecurity', 'security',
   'chip', 'semiconductor', 'nvidia', 'gpu', 'cloud', 'startup', 'data center', 'machine learning', 'neural',
   'copilot', 'cursor', 'perplexity', 'quantum', 'privacy', 'data', 'platform', 'developer', 'api',
+];
+
+const gadgetTerms = [
+  'gadget', 'device', 'hardware', 'smartphone', 'phone', 'laptop', 'tablet', 'wearable', 'smartwatch',
+  'earbuds', 'headphones', 'camera', 'drone', 'smart home', 'robot vacuum', 'foldable', 'vr', 'ar',
+  'consumer electronics',
 ];
 
 const nonTechTerms = [
@@ -132,6 +142,12 @@ export function resolveRssSettings(appConfig = config) {
     maxAgeHours,
     fallbackMaxAgeHours,
     maxPerSource: clampInteger(appConfig.rssMaxArticlesPerSource, DEFAULT_MAX_PER_SOURCE, 1, maxArticles),
+    gadgetArticlesPerDigest: clampInteger(
+      appConfig.gadgetArticlesPerDigest,
+      DEFAULT_GADGET_ARTICLES,
+      0,
+      maxArticles,
+    ),
     fetchRetries: clampInteger(appConfig.rssFetchRetries, DEFAULT_FETCH_RETRIES, 0, 5),
   };
 }
@@ -142,10 +158,11 @@ export function selectCandidatesWithFallback(
   excludedUrls = new Set(),
   priorArticles = [],
 ) {
-  const select = (maxAgeHours) => selectDiverseCandidatesDetailed(items, {
+  const select = (maxAgeHours) => selectDigestCandidatesDetailed(items, {
     maxAgeHours,
     maxPerSource: settings.maxPerSource,
     limit: FETCH_CANDIDATES,
+    gadgetArticlesPerDigest: settings.gadgetArticlesPerDigest,
     excludedUrls,
     priorArticles,
   });
@@ -237,6 +254,8 @@ function normalizeUrl(value) {
 }
 
 function parseFeed(xml, source) {
+  const sourceName = typeof source === 'string' ? source : source.name;
+  const category = typeof source === 'string' ? 'ai-tech' : (source.category || 'ai-tech');
   const blocks = [
     ...(xml.match(/<item\b[\s\S]*?<\/item>/gi) || []),
     ...(xml.match(/<entry\b[\s\S]*?<\/entry>/gi) || []),
@@ -252,18 +271,30 @@ function parseFeed(xml, source) {
       || readTag(block, 'content')
     );
     const publishedAt = readTag(block, 'pubDate') || readTag(block, 'updated') || readTag(block, 'published') || '';
-    return { title, url, summary, publishedAt, source };
+    return { title, url, summary, publishedAt, source: sourceName, category };
   }).filter((item) => item.title && item.url && item.summary.length >= 80);
 }
 
 export function scoreItem(item, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
   const text = [item.title, item.summary, item.source].join(' ').toLowerCase();
-  const techScore = techTerms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0);
+  const category = item.category || item.feedCategory || 'ai-tech';
+  const baseTechScore = techTerms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0);
+  const gadgetScore = category === 'gadgets'
+    ? gadgetTerms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0)
+    : 0;
+  const techScore = baseTechScore + gadgetScore;
   const nonTechScore = nonTechTerms.reduce((sum, term) => sum + (text.includes(term) ? 4 : 0), 0);
   const timestamp = Date.parse(item.publishedAt);
   const ageHours = Number.isNaN(timestamp) ? maxAgeHours + 1 : Math.max(0, (Date.now() - timestamp) / 3600000);
   const recencyScore = Math.max(0, maxAgeHours - ageHours) / 6;
-  return { score: techScore + recencyScore - nonTechScore, ageHours, techScore, nonTechScore };
+  return {
+    score: techScore + recencyScore - nonTechScore,
+    ageHours,
+    techScore,
+    gadgetScore,
+    nonTechScore,
+    category,
+  };
 }
 
 export function isFreshTechItem(meta, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
@@ -391,6 +422,45 @@ export function selectDiverseCandidates(items, settings = {}) {
   return selectDiverseCandidatesDetailed(items, settings).selected;
 }
 
+export function isGadgetItem(item) {
+  return item?.category === 'gadgets' || item?.feedCategory === 'gadgets';
+}
+
+/**
+ * Reserve the requested number of gadget candidates before filling the rest
+ * from the general AI/tech pool. Both pools share the same duplicate history.
+ */
+export function selectDigestCandidatesDetailed(items, settings = {}) {
+  const limit = settings.limit || FETCH_CANDIDATES;
+  const gadgetLimit = clampInteger(
+    settings.gadgetArticlesPerDigest,
+    0,
+    0,
+    limit,
+  );
+  if (gadgetLimit === 0) return selectDiverseCandidatesDetailed(items, settings);
+
+  const gadgetItems = items.filter(isGadgetItem);
+  const coreItems = items.filter((item) => !isGadgetItem(item));
+  const gadgetResult = selectDiverseCandidatesDetailed(gadgetItems, {
+    ...settings,
+    limit: gadgetLimit,
+  });
+  const coreLimit = limit - gadgetResult.selected.length;
+  const coreResult = coreLimit > 0
+    ? selectDiverseCandidatesDetailed(coreItems, {
+      ...settings,
+      limit: coreLimit,
+      priorArticles: [...(settings.priorArticles || []), ...gadgetResult.selected],
+    })
+    : { selected: [], rejectedDuplicates: [] };
+
+  return {
+    selected: [...gadgetResult.selected, ...coreResult.selected],
+    rejectedDuplicates: [...gadgetResult.rejectedDuplicates, ...coreResult.rejectedDuplicates],
+  };
+}
+
 async function fetchFeedOnce(source) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FEED_TIMEOUT_MS);
@@ -403,7 +473,7 @@ async function fetchFeedOnce(source) {
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return parseFeed(await response.text(), source.name);
+    return parseFeed(await response.text(), source);
   } finally {
     clearTimeout(timer);
   }
@@ -443,7 +513,7 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
   const publicationMode = classifyArticleCount(candidates.length, settings);
   if (publicationMode === 'insufficient') {
     throw new InsufficientArticlesError(
-      'Only ' + candidates.length + ' fresh, diverse AI/tech candidates were collected; '
+      'Only ' + candidates.length + ' fresh, diverse AI/tech and gadget candidates were collected; '
       + 'hard floor is ' + settings.hardMinArticles + '. Source errors: '
       + (sourceErrors.join('; ') || 'none'),
       { candidateCount: candidates.length, sourceErrors, publicationMode, fallbackUsed, effectiveMaxAgeHours },
