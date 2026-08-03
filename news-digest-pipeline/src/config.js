@@ -110,7 +110,7 @@ function buildConfig() {
     ntfyTopic: process.env.NTFY_TOPIC || '',
     articleThreshold: parseInt(process.env.ARTICLE_THRESHOLD || '15', 10),
     minArticlesPerDigest: parseInt(process.env.MIN_ARTICLES_PER_DIGEST || '23', 10),
-    hardMinArticlesPerDigest: parseInt(process.env.MIN_PUBLISHABLE_ARTICLES || '8', 10),
+    hardMinArticlesPerDigest: parseInt(process.env.MIN_PUBLISHABLE_ARTICLES || '15', 10),
     maxArticlesPerDigest: parseInt(process.env.MAX_ARTICLES_PER_DIGEST || '25', 10),
     gadgetArticlesPerDigest: parseInt(process.env.GADGET_ARTICLES_PER_DIGEST || '5', 10),
     marketplaceArticlesPerDigest: parseInt(process.env.MARKETPLACE_ARTICLES_PER_DIGEST || '1', 10),

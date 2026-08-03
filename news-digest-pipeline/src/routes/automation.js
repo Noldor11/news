@@ -114,6 +114,8 @@ function setTelegramRunResult(runId, digestId, telegram, result = {}) {
     recordedDuplicates: result.recordedDuplicates ?? null,
     reused: result.reused ?? null,
     sourceErrorCount: result.sourceErrors?.length || 0,
+    sourceDiagnostics: result.sourceDiagnostics || [],
+    laneStats: result.laneStats || [],
     publicationMode: result.publicationMode || null,
     fallbackUsed: Boolean(result.fallbackUsed),
     effectiveMaxAgeHours: result.effectiveMaxAgeHours ?? null,
@@ -241,8 +243,16 @@ async function executeDigest(req, res, trigger) {
     }
 
     if (result.degraded) {
+      const missingMarketplace = (result.laneStats || [])
+        .filter((lane) => ['upwork', 'fiverr'].includes(lane.category) && lane.selected === 0)
+        .map((lane) => lane.category)
+        .join(', ');
+      const marketplaceNotice = missingMarketplace
+        ? ' Свежих материалов: нет (' + missingMarketplace + ').'
+        : '';
       const notice = 'GDN: опубликован сокращённый дайджест за ' + kyivDateKey()
-        + '. Материалов: ' + result.selected + ', обычная цель: ' + result.preferredMinimum + '.';
+        + '. Материалов: ' + result.selected + ', обычная цель: ' + result.preferredMinimum + '.'
+        + marketplaceNotice;
       const alertResult = await sendAutomationAlert(notice);
       if (!alertResult?.ok) console.error('[automation] degraded digest alert failed:', alertResult?.error);
     }
@@ -260,6 +270,8 @@ async function executeDigest(req, res, trigger) {
       resumed: Boolean(result.resumed),
       telegram,
       sourceErrors: result.sourceErrors || [],
+      sourceDiagnostics: result.sourceDiagnostics || [],
+      laneStats: result.laneStats || [],
     });
   } catch (error) {
     const status = phase === 'publishing' ? 'partial' : 'failed';

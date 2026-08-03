@@ -27,7 +27,7 @@ describe('RSS selection quality gates', () => {
   it('uses the 23-25 article policy with five gadget and one platform slot by default', () => {
     expect(resolveRssSettings({})).toMatchObject({
       minArticles: 23,
-      hardMinArticles: 8,
+      hardMinArticles: 15,
       maxArticles: 25,
       gadgetArticlesPerDigest: 5,
       marketplaceArticlesPerDigest: 1,
@@ -178,6 +178,30 @@ describe('RSS selection quality gates', () => {
     expect(result.selected.filter((item) => item.category === 'upwork')).toHaveLength(1);
     expect(result.selected.filter((item) => item.category === 'fiverr')).toHaveLength(1);
     expect(result.selected.filter((item) => item.category === 'linkedin')).toHaveLength(1);
+    expect(result.laneStats).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: 'upwork', target: 1, fetched: 1, fresh: 1, selected: 1 }),
+      expect.objectContaining({ category: 'fiverr', target: 1, fetched: 1, fresh: 1, selected: 1 }),
+      expect.objectContaining({ category: 'linkedin', target: 1, fetched: 1, fresh: 1, selected: 1 }),
+    ]));
+  });
+
+  it('reports missing marketplace lanes instead of inventing platform news', () => {
+    const result = selectDigestCandidatesDetailed([
+      baseItem({ title: 'OpenAI ships a new coding model', url: 'https://ai.example/only' }),
+    ], {
+      maxAgeHours: 36,
+      maxPerSource: 3,
+      limit: 10,
+      gadgetArticlesPerDigest: 0,
+      marketplaceArticlesPerDigest: 1,
+    });
+
+    expect(result.selected.every((item) => !['upwork', 'fiverr', 'linkedin'].includes(item.category))).toBe(true);
+    expect(result.laneStats).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: 'upwork', fetched: 0, fresh: 0, selected: 0 }),
+      expect.objectContaining({ category: 'fiverr', fetched: 0, fresh: 0, selected: 0 }),
+      expect.objectContaining({ category: 'linkedin', fetched: 0, fresh: 0, selected: 0 }),
+    ]));
   });
 
   it('parses LinkedIn Pressroom cards into normal article candidates', () => {
@@ -196,6 +220,7 @@ describe('RSS selection quality gates', () => {
       publishedAt: '2026-08-01T01:30:00-07:00',
     }]);
   });
+
 
   it('excludes already used URLs before applying source caps', () => {
     const selected = selectDiverseCandidates([

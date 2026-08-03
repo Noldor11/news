@@ -13,7 +13,7 @@ import { generateDigest } from './digest-generator.js';
 import { publishDigest } from './publishers/index.js';
 
 const DEFAULT_MIN_ARTICLES = 23;
-const DEFAULT_HARD_MIN_ARTICLES = 8;
+const DEFAULT_HARD_MIN_ARTICLES = 15;
 const DEFAULT_MAX_ARTICLES = 25;
 const DEFAULT_GADGET_ARTICLES = 5;
 const DEFAULT_MARKETPLACE_ARTICLES = 1;
@@ -39,6 +39,14 @@ const sources = [
   { name: 'AWS Machine Learning', url: 'https://aws.amazon.com/blogs/machine-learning/feed/' },
   { name: 'ZDNet AI', url: 'https://www.zdnet.com/topic/artificial-intelligence/rss.xml' },
   { name: 'IEEE Spectrum AI', url: 'https://spectrum.ieee.org/feeds/topic/artificial-intelligence.rss' },
+  // Official engineering/research feeds widen the pool without introducing a
+  // generic news search that could pull politics or low-quality reposts.
+  { name: 'GitHub Blog', url: 'https://github.blog/feed/' },
+  { name: 'GitHub Changelog', url: 'https://github.blog/changelog/feed/' },
+  { name: 'Mozilla Hacks', url: 'https://hacks.mozilla.org/feed/' },
+  { name: 'Meta Engineering', url: 'https://engineering.fb.com/feed/' },
+  { name: 'Google Developers Blog', url: 'https://developers.googleblog.com/feeds/posts/default?alt=rss' },
+  { name: 'Microsoft Research', url: 'https://www.microsoft.com/en-us/research/feed/' },
   { name: 'TechCrunch Gadgets', category: 'gadgets', url: 'https://techcrunch.com/category/gadgets/feed/' },
   { name: 'Ars Technica Gear & Gadgets', category: 'gadgets', url: 'https://feeds.arstechnica.com/arstechnica/gadgets' },
   { name: 'The Verge Gadgets', category: 'gadgets', url: 'https://www.theverge.com/rss/gadgets/index.xml' },
@@ -190,6 +198,7 @@ export function selectCandidatesWithFallback(
     return {
       candidates: primary.selected,
       rejectedDuplicates: primary.rejectedDuplicates,
+      laneStats: primary.laneStats,
       fallbackUsed: false,
       effectiveMaxAgeHours: settings.maxAgeHours,
     };
@@ -199,6 +208,7 @@ export function selectCandidatesWithFallback(
   return {
     candidates: fallback.selected,
     rejectedDuplicates: fallback.rejectedDuplicates,
+    laneStats: fallback.laneStats,
     fallbackUsed: true,
     effectiveMaxAgeHours: settings.fallbackMaxAgeHours,
   };
@@ -489,6 +499,7 @@ export function isGadgetItem(item) {
  */
 export function selectDigestCandidatesDetailed(items, settings = {}) {
   const limit = settings.limit || FETCH_CANDIDATES;
+  const maxAgeHours = settings.maxAgeHours || DEFAULT_MAX_AGE_HOURS;
   const laneTargets = [
     {
       category: 'gadgets',
@@ -505,17 +516,24 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
     })),
   ].filter((lane) => lane.target > 0);
 
-  if (laneTargets.length === 0) return selectDiverseCandidatesDetailed(items, settings);
+  if (laneTargets.length === 0) {
+    return { ...selectDiverseCandidatesDetailed(items, settings), laneStats: [] };
+  }
 
   const selected = [];
   const rejectedDuplicates = [];
   const activeLaneCategories = new Set(laneTargets.map((lane) => lane.category));
+  const laneStats = [];
   let remaining = limit;
   let priorArticles = [...(settings.priorArticles || [])];
 
   for (const lane of laneTargets) {
     if (remaining <= 0) break;
     const laneItems = items.filter((item) => (item.category || item.feedCategory || 'ai-tech') === lane.category);
+    const freshCount = laneItems
+      .map((item) => ({ ...item, meta: item.meta || scoreItem(item, maxAgeHours) }))
+      .filter((item) => isFreshTechItem(item.meta, maxAgeHours))
+      .length;
     const laneResult = selectDiverseCandidatesDetailed(laneItems, {
       ...settings,
       limit: Math.min(lane.target, remaining),
@@ -523,6 +541,14 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
     });
     selected.push(...laneResult.selected);
     rejectedDuplicates.push(...laneResult.rejectedDuplicates);
+    laneStats.push({
+      category: lane.category,
+      target: lane.target,
+      fetched: laneItems.length,
+      fresh: freshCount,
+      selected: laneResult.selected.length,
+      duplicates: laneResult.rejectedDuplicates.length,
+    });
     remaining -= laneResult.selected.length;
     priorArticles = [...priorArticles, ...laneResult.selected];
   }
@@ -539,6 +565,7 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
   return {
     selected: [...selected, ...coreResult.selected],
     rejectedDuplicates: [...rejectedDuplicates, ...coreResult.rejectedDuplicates],
+    laneStats,
   };
 }
 
@@ -555,9 +582,8 @@ async function fetchFeedOnce(source) {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const body = await response.text();
-    return source.format === 'linkedin-pressroom'
-      ? parseLinkedInPressroom(body, source)
-      : parseFeed(body, source);
+    if (source.format === 'linkedin-pressroom') return parseLinkedInPressroom(body, source);
+    return parseFeed(body, source);
   } finally {
     clearTimeout(timer);
   }
@@ -577,18 +603,36 @@ async function fetchFeed(source, retries) {
 }
 
 async function collectCandidates(settings, excludedUrls = new Set(), priorArticles = []) {
-  const sourceErrors = [];
   const feedResults = await Promise.all(sources.map(async (source) => {
     try {
-      return await fetchFeed(source, settings.fetchRetries);
+      return { source, items: await fetchFeed(source, settings.fetchRetries), error: null };
     } catch (error) {
-      sourceErrors.push(`${source.name}: ${error.message}`);
-      return [];
+      return { source, items: [], error: error.message };
     }
   }));
 
-  const { candidates, rejectedDuplicates, fallbackUsed, effectiveMaxAgeHours } = selectCandidatesWithFallback(
-    feedResults.flat(),
+  const sourceErrors = feedResults
+    .filter((result) => result.error)
+    .map((result) => `${result.source.name}: ${result.error}`);
+  const sourceDiagnostics = feedResults.map(({ source, items, error }) => {
+    const scoredItems = items.map((item) => ({ ...item, meta: scoreItem(item, settings.maxAgeHours) }));
+    const fallbackScoredItems = items.map((item) => ({ ...item, meta: scoreItem(item, settings.fallbackMaxAgeHours) }));
+    const datedItems = items
+      .filter((item) => !Number.isNaN(Date.parse(item.publishedAt)))
+      .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt));
+    return {
+      name: source.name,
+      category: source.category || 'ai-tech',
+      fetched: items.length,
+      fresh: scoredItems.filter((item) => isFreshTechItem(item.meta, settings.maxAgeHours)).length,
+      freshAtFallback: fallbackScoredItems.filter((item) => isFreshTechItem(item.meta, settings.fallbackMaxAgeHours)).length,
+      latestPublishedAt: datedItems[0]?.publishedAt || null,
+      error,
+    };
+  });
+
+  const { candidates, rejectedDuplicates, laneStats, fallbackUsed, effectiveMaxAgeHours } = selectCandidatesWithFallback(
+    feedResults.flatMap((result) => result.items),
     settings,
     excludedUrls,
     priorArticles,
@@ -600,7 +644,15 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
       'Only ' + candidates.length + ' fresh, diverse AI/tech, gadget, and platform candidates were collected; '
       + 'hard floor is ' + settings.hardMinArticles + '. Source errors: '
       + (sourceErrors.join('; ') || 'none'),
-      { candidateCount: candidates.length, sourceErrors, publicationMode, fallbackUsed, effectiveMaxAgeHours },
+      {
+        candidateCount: candidates.length,
+        sourceErrors,
+        sourceDiagnostics,
+        laneStats,
+        publicationMode,
+        fallbackUsed,
+        effectiveMaxAgeHours,
+      },
     );
   }
 
@@ -608,6 +660,8 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
     candidates,
     rejectedDuplicates,
     sourceErrors,
+    sourceDiagnostics,
+    laneStats,
     publicationMode,
     fallbackUsed,
     effectiveMaxAgeHours,
@@ -668,6 +722,8 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
     candidates,
     rejectedDuplicates,
     sourceErrors,
+    sourceDiagnostics,
+    laneStats,
     publicationMode: collectedMode,
     fallbackUsed,
     effectiveMaxAgeHours,
@@ -682,6 +738,8 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
       semanticDuplicateCount: rejectedDuplicates.length,
       duplicateReasons,
       sourceErrorCount: sourceErrors.length,
+      sourceDiagnostics,
+      laneStats,
       publicationMode: collectedMode,
       fallbackUsed,
       effectiveMaxAgeHours,
@@ -736,6 +794,8 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
         semanticDuplicates: rejectedDuplicates.length,
         duplicateReasons,
         publicationMode: selectedMode,
+        sourceDiagnostics,
+        laneStats,
       },
     );
   }
@@ -757,6 +817,8 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
       semanticDuplicates: rejectedDuplicates.length,
       duplicateReasons,
       reused,
+      sourceDiagnostics,
+      laneStats,
       publicationMode: articleMode,
     });
   }
@@ -827,6 +889,8 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
     fallbackUsed,
     effectiveMaxAgeHours,
     hardMinimum: settings.hardMinArticles,
+    sourceDiagnostics,
+    laneStats,
     digestId,
     published: { telegram: published.telegram || null },
     sourceErrors,
