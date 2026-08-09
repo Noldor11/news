@@ -118,6 +118,25 @@ function buildConfig() {
     rssFallbackMaxArticleAgeHours: parseInt(process.env.RSS_FALLBACK_MAX_ARTICLE_AGE_HOURS || '72', 10),
     rssMaxArticlesPerSource: parseInt(process.env.RSS_MAX_ARTICLES_PER_SOURCE || '3', 10),
     rssFetchRetries: parseInt(process.env.RSS_FETCH_RETRIES || '2', 10),
+    semanticDedupEnabled: process.env.SEMANTIC_DEDUP_ENABLED !== 'false',
+    semanticDedupHistoryDays: parseInt(process.env.SEMANTIC_DEDUP_HISTORY_DAYS || '30', 10),
+    semanticDedupMaxPairs: parseInt(process.env.SEMANTIC_DEDUP_MAX_PAIRS || '40', 10),
+
+    // Public marketplace research runs in Apify Cloud. No marketplace login,
+    // cookies, browser profile, or private account data is ever supplied.
+    apifyApiToken: process.env.APIFY_API_TOKEN || '',
+    apifyUpworkEnabled: process.env.APIFY_UPWORK_ENABLED === 'true',
+    apifyUpworkMaxItems: parseInt(process.env.APIFY_UPWORK_MAX_ITEMS || '30', 10),
+    apifyUpworkKeywords: process.env.APIFY_UPWORK_KEYWORDS
+      || 'n8n Make.com Zapier AI automation AI agent',
+    apifyFiverrEnabled: process.env.APIFY_FIVERR_ENABLED === 'true',
+    apifyFiverrMaxItems: parseInt(process.env.APIFY_FIVERR_MAX_ITEMS || '30', 10),
+    apifyFiverrWeekday: parseInt(process.env.APIFY_FIVERR_WEEKDAY || '1', 10),
+    apifyFiverrQueries: (process.env.APIFY_FIVERR_QUERIES
+      || 'n8n automation|Make.com automation|AI agent automation')
+      .split('|')
+      .map((value) => value.trim())
+      .filter(Boolean),
     checkIntervalMs: parseInt(process.env.CHECK_INTERVAL_MS || '60000', 10),
     // The daily n8n workflow owns collection and generation in production.
     autoQueueEnabled: process.env.AUTO_QUEUE_ENABLED === 'true',

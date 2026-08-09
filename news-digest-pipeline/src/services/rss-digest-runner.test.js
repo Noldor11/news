@@ -322,7 +322,7 @@ describe('RSS selection quality gates', () => {
     expect(selected).toHaveLength(2);
   });
 
-  it('collapses paraphrased deepfake and voice-mode reports', () => {
+  it('keeps lexical filtering conservative and collapses only the obvious voice-mode pair', () => {
     const deepfake = selectDiverseCandidates([
       baseItem({
         url: 'https://verge.example/deepfake',
@@ -348,7 +348,9 @@ describe('RSS selection quality gates', () => {
       }),
     ], { maxAgeHours: 36, maxPerSource: 3, limit: 10 });
 
-    expect(deepfake).toHaveLength(1);
+    // The deepfake pair is intentionally left for the update-aware LLM
+    // verdict instead of being decided by one hard-coded topic word.
+    expect(deepfake).toHaveLength(2);
     expect(voice).toHaveLength(1);
   });
 

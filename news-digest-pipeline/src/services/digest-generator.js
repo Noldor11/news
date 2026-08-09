@@ -126,7 +126,7 @@ async function withRetry(fn, attempt = 1) {
  * @param {{system:string, user:string, maxTokens:number}} opts
  * @returns {Promise<{text:string, inputTokens:number, outputTokens:number}>}
  */
-async function callModel(config, { system, user, maxTokens }) {
+export async function callModel(config, { system, user, maxTokens }) {
   const vendor = config.llmVendor || 'anthropic';
 
   if (vendor === 'openai') {
@@ -184,14 +184,17 @@ async function callModel(config, { system, user, maxTokens }) {
   };
 }
 
-export async function generateDigest(db, articles, config) {
+export async function generateDigest(db, articles, config, initialUsage = {}) {
   const log = [];
 
   // Token accounting across every successful model call (Phase A + Phase B).
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
+  let totalInputTokens = Number(initialUsage.inputTokens) || 0;
+  let totalOutputTokens = Number(initialUsage.outputTokens) || 0;
 
   log.push(`Starting digest generation for ${articles.length} articles`);
+  if (totalInputTokens || totalOutputTokens) {
+    log.push(`Semantic dedup tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
+  }
 
   // Select Phase A system prompt by active scenario. Assembly (Phase B) is
   // scenario-independent and always uses config.assemblyPrompt.

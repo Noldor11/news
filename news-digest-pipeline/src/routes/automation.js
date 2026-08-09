@@ -81,6 +81,7 @@ function configuredSecrets() {
     config.telegramWebhookSecret,
     config.anthropicApiKey,
     config.openaiApiKey,
+    config.apifyApiToken,
   ].filter(Boolean);
 }
 
@@ -110,6 +111,7 @@ function setTelegramRunResult(runId, digestId, telegram, result = {}) {
     duplicates: result.duplicates ?? null,
     exactDuplicates: result.exactDuplicates ?? null,
     semanticDuplicates: result.semanticDuplicates ?? null,
+    semanticDecisionStats: result.semanticDecisionStats || {},
     duplicateReasons: result.duplicateReasons || {},
     recordedDuplicates: result.recordedDuplicates ?? null,
     reused: result.reused ?? null,

@@ -58,9 +58,19 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   updated_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (digest_id) REFERENCES digests(id)
 );
+
+CREATE TABLE IF NOT EXISTS marketplace_snapshots (
+  snapshot_key TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  item_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
 CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
 CREATE INDEX IF NOT EXISTS idx_articles_url ON articles(url);
 CREATE INDEX IF NOT EXISTS idx_articles_digest_id ON articles(digest_id);
 CREATE INDEX IF NOT EXISTS idx_digests_date ON digests(date);
 CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
 CREATE INDEX IF NOT EXISTS idx_automation_runs_status ON automation_runs(status);
+CREATE INDEX IF NOT EXISTS idx_marketplace_snapshots_source ON marketplace_snapshots(source, created_at);

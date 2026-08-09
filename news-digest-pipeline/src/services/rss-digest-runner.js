@@ -10,7 +10,9 @@ import {
   resetArticlesForRetry,
 } from '../db/index.js';
 import { generateDigest } from './digest-generator.js';
+import { collectApifyMarketplace } from './apify-marketplace.js';
 import { publishDigest } from './publishers/index.js';
+import { resolveHistoricalDuplicates } from './semantic-dedup.js';
 
 const DEFAULT_MIN_ARTICLES = 23;
 const DEFAULT_HARD_MIN_ARTICLES = 15;
@@ -23,7 +25,7 @@ const DEFAULT_MAX_PER_SOURCE = 3;
 const DEFAULT_FETCH_RETRIES = 2;
 const FETCH_CANDIDATES = 80;
 const FEED_TIMEOUT_MS = 15000;
-const EVENT_HISTORY_DAYS = 10;
+const DEFAULT_EVENT_HISTORY_DAYS = 30;
 
 const sources = [
   { name: 'TechCrunch AI', url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },
@@ -53,7 +55,17 @@ const sources = [
   { name: 'Ars Technica Gear & Gadgets', category: 'gadgets', url: 'https://feeds.arstechnica.com/arstechnica/gadgets' },
   { name: 'The Verge Gadgets', category: 'gadgets', url: 'https://www.theverge.com/rss/gadgets/index.xml' },
   { name: 'Upwork News', category: 'upwork', url: 'https://investors.upwork.com/rss/news-releases.xml' },
+  {
+    name: 'Google News Upwork Market',
+    category: 'upwork',
+    url: 'https://news.google.com/rss/search?q=%22Upwork%22%20(freelance%20OR%20jobs%20OR%20skills%20OR%20demand)%20when%3A7d&hl=en-US&gl=US&ceid=US%3Aen',
+  },
   { name: 'Fiverr News', category: 'fiverr', url: 'https://investors.fiverr.com/rss/news-releases.xml' },
+  {
+    name: 'Google News Fiverr Market',
+    category: 'fiverr',
+    url: 'https://news.google.com/rss/search?q=%22Fiverr%22%20(freelance%20OR%20jobs%20OR%20skills%20OR%20demand)%20when%3A7d&hl=en-US&gl=US&ceid=US%3Aen',
+  },
   { name: 'LinkedIn Pressroom', category: 'linkedin', format: 'linkedin-pressroom', url: 'https://news.linkedin.com/' },
 ];
 
@@ -111,11 +123,6 @@ const tokenAliases = new Map([
   ['nudes', 'deepfake-abuse'],
   ['nude', 'deepfake-abuse'],
   ['undress', 'deepfake-abuse'],
-]);
-
-const eventActionTokens = new Set([
-  'acquisition', 'ban', 'breach', 'deepfake-abuse', 'exploit', 'funding', 'hack', 'incident',
-  'launch', 'lawsuit', 'mode', 'release', 'security', 'update', 'vulnerability', 'voice',
 ]);
 
 function sleep(ms) {
@@ -410,20 +417,16 @@ function eventTokens(item) {
 export function eventSimilarity(left, right) {
   const title = tokenSimilarity(titleTokens(left.title), titleTokens(right.title));
   const combined = tokenSimilarity(eventTokens(left), eventTokens(right));
-  const sharesEventAction = title.sharedTokens.some((token) => eventActionTokens.has(token))
-    || combined.sharedTokens.some((token) => eventActionTokens.has(token));
-  const duplicate = title.score >= 0.42
-    || (sharesEventAction && title.shared >= 4 && title.score >= 0.33)
-    || (sharesEventAction && title.shared >= 3 && title.score >= 0.3)
-    || (sharesEventAction && title.shared >= 3 && combined.score >= 0.28)
-    || (sharesEventAction && title.shared >= 2 && combined.score >= 0.4);
+  const duplicate = title.score >= 0.58
+    || (title.shared >= 4 && title.score >= 0.34)
+    || (title.shared >= 3 && combined.score >= 0.32)
+    || (title.shared >= 2 && title.score >= 0.4 && combined.score >= 0.38);
   return {
     duplicate,
     score: Math.max(title.score, combined.score),
     titleScore: title.score,
     combinedScore: combined.score,
     sharedTitleTokens: title.shared,
-    sharesEventAction,
   };
 }
 
@@ -604,18 +607,99 @@ async function fetchFeed(source, retries) {
   throw lastError;
 }
 
-async function collectCandidates(settings, excludedUrls = new Set(), priorArticles = []) {
-  const feedResults = await Promise.all(sources.map(async (source) => {
-    try {
-      return { source, items: await fetchFeed(source, settings.fetchRetries), error: null };
-    } catch (error) {
-      return { source, items: [], error: error.message };
-    }
+function semanticLaneStats(laneStats, selected, rejected) {
+  return laneStats.map((lane) => ({
+    ...lane,
+    selected: selected.filter((item) => (item.category || item.feedCategory) === lane.category).length,
+    duplicates: (lane.duplicates || 0)
+      + rejected.filter((item) => (item.category || item.feedCategory) === lane.category).length,
   }));
+}
+
+function addUsage(left = {}, right = {}) {
+  return {
+    inputTokens: (left.inputTokens || 0) + (right.inputTokens || 0),
+    outputTokens: (left.outputTokens || 0) + (right.outputTokens || 0),
+  };
+}
+
+async function selectCandidatesWithSemanticFallback(
+  items,
+  settings,
+  excludedUrls,
+  priorArticles,
+) {
+  const selectAtAge = async (maxAgeHours) => {
+    const batch = selectDigestCandidatesDetailed(items, {
+      maxAgeHours,
+      maxPerSource: settings.maxPerSource,
+      limit: FETCH_CANDIDATES,
+      gadgetArticlesPerDigest: settings.gadgetArticlesPerDigest,
+      marketplaceArticlesPerDigest: settings.marketplaceArticlesPerDigest,
+      excludedUrls,
+      // Cross-day history needs an update-aware verdict. Obvious same-batch
+      // duplicates are removed here; ambiguous pairs receive the same semantic
+      // verdict in the next step.
+      priorArticles: [],
+    });
+    const semantic = await resolveHistoricalDuplicates({
+      candidates: batch.selected,
+      priorArticles,
+      similarityFn: eventSimilarity,
+      appConfig: config,
+      maxPairs: clampInteger(config.semanticDedupMaxPairs, 40, 0, 100),
+    });
+    return {
+      selected: semantic.selected,
+      rejectedDuplicates: [...batch.rejectedDuplicates, ...semantic.rejected],
+      laneStats: semanticLaneStats(batch.laneStats, semantic.selected, semantic.rejected),
+      semanticDecisionStats: semantic.stats,
+      semanticUsage: semantic.usage,
+    };
+  };
+
+  const primary = await selectAtAge(settings.maxAgeHours);
+  if (primary.selected.length >= settings.hardMinArticles
+      || settings.fallbackMaxAgeHours <= settings.maxAgeHours) {
+    return {
+      candidates: primary.selected,
+      rejectedDuplicates: primary.rejectedDuplicates,
+      laneStats: primary.laneStats,
+      semanticDecisionStats: primary.semanticDecisionStats,
+      semanticUsage: primary.semanticUsage,
+      fallbackUsed: false,
+      effectiveMaxAgeHours: settings.maxAgeHours,
+    };
+  }
+
+  const fallback = await selectAtAge(settings.fallbackMaxAgeHours);
+  return {
+    candidates: fallback.selected,
+    rejectedDuplicates: fallback.rejectedDuplicates,
+    laneStats: fallback.laneStats,
+    semanticDecisionStats: fallback.semanticDecisionStats,
+    semanticUsage: addUsage(primary.semanticUsage, fallback.semanticUsage),
+    fallbackUsed: true,
+    effectiveMaxAgeHours: settings.fallbackMaxAgeHours,
+  };
+}
+
+async function collectCandidates(settings, excludedUrls = new Set(), priorArticles = []) {
+  const [feedResults, marketplace] = await Promise.all([
+    Promise.all(sources.map(async (source) => {
+      try {
+        return { source, items: await fetchFeed(source, settings.fetchRetries), error: null };
+      } catch (error) {
+        return { source, items: [], error: error.message };
+      }
+    })),
+    collectApifyMarketplace(config),
+  ]);
 
   const sourceErrors = feedResults
     .filter((result) => result.error)
-    .map((result) => `${result.source.name}: ${result.error}`);
+    .map((result) => `${result.source.name}: ${result.error}`)
+    .concat(marketplace.errors);
   const sourceDiagnostics = feedResults.map(({ source, items, error }) => {
     const scoredItems = items.map((item) => ({ ...item, meta: scoreItem(item, settings.maxAgeHours) }));
     const fallbackScoredItems = items.map((item) => ({ ...item, meta: scoreItem(item, settings.fallbackMaxAgeHours) }));
@@ -631,10 +715,18 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
       latestPublishedAt: datedItems[0]?.publishedAt || null,
       error,
     };
-  });
+  }).concat(marketplace.diagnostics);
 
-  const { candidates, rejectedDuplicates, laneStats, fallbackUsed, effectiveMaxAgeHours } = selectCandidatesWithFallback(
-    feedResults.flatMap((result) => result.items),
+  const {
+    candidates,
+    rejectedDuplicates,
+    laneStats,
+    semanticDecisionStats,
+    semanticUsage,
+    fallbackUsed,
+    effectiveMaxAgeHours,
+  } = await selectCandidatesWithSemanticFallback(
+    [...feedResults.flatMap((result) => result.items), ...marketplace.items],
     settings,
     excludedUrls,
     priorArticles,
@@ -651,6 +743,7 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
         sourceErrors,
         sourceDiagnostics,
         laneStats,
+        semanticDecisionStats,
         publicationMode,
         fallbackUsed,
         effectiveMaxAgeHours,
@@ -664,6 +757,8 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
     sourceErrors,
     sourceDiagnostics,
     laneStats,
+    semanticDecisionStats,
+    semanticUsage,
     publicationMode,
     fallbackUsed,
     effectiveMaxAgeHours,
@@ -690,19 +785,28 @@ function getDedupHistory(db) {
      FROM articles
      WHERE url IS NOT NULL`,
   ).all();
+  const historyDays = clampInteger(
+    config.semanticDedupHistoryDays,
+    DEFAULT_EVENT_HISTORY_DAYS,
+    1,
+    90,
+  );
+  const cutoff = Date.now() - historyDays * 86400000;
+  const isRecentUsedRss = (article) => article.source === 'railway-rss'
+    && article.digest_id
+    && article.status === 'used'
+    && Date.parse(`${article.created_at}Z`) >= cutoff;
 
   // Failed, unattached RSS entries remain retryable. All other URLs are
-  // excluded before diversity caps, so former top stories cannot crowd out
-  // newer candidates from the same source.
+  // excluded before diversity caps. Recent published URLs instead go through
+  // the update-aware semantic verdict, so a materially updated source page is
+  // not blocked merely because its canonical URL stayed the same.
   const excludedUrls = new Set(existing
-    .filter((article) => !canReuseArticle(article))
+    .filter((article) => !canReuseArticle(article) && !isRecentUsedRss(article))
     .map((article) => article.url));
 
   const priorArticles = existing
-    .filter((article) => article.source === 'railway-rss'
-      && article.digest_id
-      && article.status === 'used'
-      && Date.parse(`${article.created_at}Z`) >= Date.now() - EVENT_HISTORY_DAYS * 86400000)
+    .filter(isRecentUsedRss)
     .map((article) => ({
       ...article,
       summary: article.content || '',
@@ -710,6 +814,19 @@ function getDedupHistory(db) {
     }));
 
   return { excludedUrls, priorArticles };
+}
+
+function storageUrlForCandidate(db, item) {
+  const existing = db.prepare('SELECT id FROM articles WHERE url = ?').get(item.url);
+  if (!existing || item.semanticVerdict !== 'update') return item.url;
+  try {
+    const url = new URL(item.url);
+    const fingerprint = item.eventFingerprint || buildEventFingerprint(item);
+    url.hash = `gdn-update-${new Date().toISOString().slice(0, 10)}-${fingerprint.slice(0, 8)}`;
+    return url.toString();
+  } catch {
+    return item.url;
+  }
 }
 
 /**
@@ -726,6 +843,8 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
     sourceErrors,
     sourceDiagnostics,
     laneStats,
+    semanticDecisionStats,
+    semanticUsage,
     publicationMode: collectedMode,
     fallbackUsed,
     effectiveMaxAgeHours,
@@ -742,6 +861,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
       sourceErrorCount: sourceErrors.length,
       sourceDiagnostics,
       laneStats,
+      semanticDecisionStats,
       publicationMode: collectedMode,
       fallbackUsed,
       effectiveMaxAgeHours,
@@ -762,7 +882,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
     ].join('\n\n').slice(0, 6000);
 
     const result = insertArticle({
-      url: item.url,
+      url: storageUrlForCandidate(db, item),
       title: item.title,
       content,
       source: 'railway-rss',
@@ -821,13 +941,14 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
       reused,
       sourceDiagnostics,
       laneStats,
+      semanticDecisionStats,
       publicationMode: articleMode,
     });
   }
 
   let digestId;
   try {
-    digestId = await generateDigest(db, articles, config);
+    digestId = await generateDigest(db, articles, config, semanticUsage);
   } catch (error) {
     resetArticlesForRetry(selectedArticleIds);
     throw error;
@@ -881,6 +1002,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
     duplicates,
     exactDuplicates,
     semanticDuplicates: rejectedDuplicates.length,
+    semanticDecisionStats,
     duplicateReasons,
     recordedDuplicates,
     reused,

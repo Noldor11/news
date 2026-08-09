@@ -159,6 +159,31 @@ export function getArticleCount(status) {
   return db.prepare('SELECT COUNT(*) as count FROM articles').get().count;
 }
 
+export function getMarketplaceSnapshot(snapshotKey) {
+  const row = db.prepare(
+    'SELECT * FROM marketplace_snapshots WHERE snapshot_key = ?'
+  ).get(snapshotKey);
+  if (!row) return null;
+  try {
+    return { ...row, payload: JSON.parse(row.payload_json) };
+  } catch {
+    return null;
+  }
+}
+
+export function saveMarketplaceSnapshot({ snapshotKey, source, payload, itemCount = 0 }) {
+  db.prepare(
+    `INSERT INTO marketplace_snapshots (snapshot_key, source, payload_json, item_count)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(snapshot_key) DO UPDATE SET
+       source = excluded.source,
+       payload_json = excluded.payload_json,
+       item_count = excluded.item_count,
+       updated_at = datetime('now')`
+  ).run(snapshotKey, source, JSON.stringify(payload), itemCount);
+  return getMarketplaceSnapshot(snapshotKey);
+}
+
 export function updateArticleStatus(id, status) {
   db.prepare(
     `UPDATE articles SET status = ?, updated_at = datetime('now') WHERE id = ?`
