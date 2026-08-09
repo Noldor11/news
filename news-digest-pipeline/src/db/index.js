@@ -318,6 +318,15 @@ export function getLatestAutomationRun() {
   return db.prepare('SELECT * FROM automation_runs ORDER BY updated_at DESC, rowid DESC LIMIT 1').get();
 }
 
+export function getLatestDailyAutomationRun() {
+  return db.prepare(
+    `SELECT * FROM automation_runs
+     WHERE trigger IN ('schedule', 'recovery')
+     ORDER BY updated_at DESC, rowid DESC
+     LIMIT 1`
+  ).get();
+}
+
 export function updateAutomationRun(id, fields) {
   const allowed = [
     'status', 'stage', 'degraded', 'metrics_json', 'digest_id',

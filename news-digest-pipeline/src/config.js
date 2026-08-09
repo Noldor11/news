@@ -125,6 +125,7 @@ function buildConfig() {
     // Public marketplace research runs in Apify Cloud. No marketplace login,
     // cookies, browser profile, or private account data is ever supplied.
     apifyApiToken: process.env.APIFY_API_TOKEN || '',
+    apifyWeeklyMarketEnabled: process.env.APIFY_WEEKLY_MARKET_ENABLED === 'true',
     apifyUpworkEnabled: process.env.APIFY_UPWORK_ENABLED === 'true',
     apifyUpworkMaxItems: parseInt(process.env.APIFY_UPWORK_MAX_ITEMS || '30', 10),
     apifyUpworkKeywords: process.env.APIFY_UPWORK_KEYWORDS
@@ -154,6 +155,7 @@ function buildConfig() {
     telegramPublishChatId: process.env.TELEGRAM_PUBLISH_CHAT_ID || '',
     telegramAlertChatId: process.env.TELEGRAM_ALERT_CHAT_ID || '',
     n8nDailyTriggerSecret: process.env.N8N_DAILY_TRIGGER_SECRET || '',
+    n8nWeeklyTriggerSecret: process.env.N8N_WEEKLY_TRIGGER_SECRET || '',
     youtubeAccessToken: process.env.YOUTUBE_ACCESS_TOKEN || '',
     youtubeChannelId: process.env.YOUTUBE_CHANNEL_ID || '',
 

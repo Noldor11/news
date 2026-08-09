@@ -1,0 +1,85 @@
+[
+  {
+    "id": "GDNWklyMkt26A9Q7",
+    "name": "GDN Weekly Freelance Market",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "weeks",
+                "triggerAtDay": [
+                  5
+                ],
+                "triggerAtHour": 17
+              }
+            ]
+          }
+        },
+        "id": "c2c70fea-2f95-491e-a68a-5f078c1ea2ce",
+        "name": "Friday 5PM Trigger",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.NEWS_DIGEST_BASE_URL + '/api/automation/weekly-marketplace' }}",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.NEWS_DIGEST_API_KEY }}"
+              },
+              {
+                "name": "X-N8N-Weekly-Secret",
+                "value": "={{ $env.NEWS_DIGEST_DAILY_SECRET }}"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 900000
+          }
+        },
+        "id": "f44ffbcd-074a-4f5c-9b59-628f13b536a2",
+        "name": "Collect Weekly Upwork and Fiverr Report",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          240,
+          0
+        ],
+        "retryOnFail": false
+      }
+    ],
+    "connections": {
+      "Friday 5PM Trigger": {
+        "main": [
+          [
+            {
+              "node": "Collect Weekly Upwork and Fiverr Report",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "timezone": "Europe/Kiev",
+      "executionOrder": "v1",
+      "errorWorkflow": "YaKxrjhxSZPF7Zzp",
+      "binaryMode": "separate"
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {}
+  }
+]

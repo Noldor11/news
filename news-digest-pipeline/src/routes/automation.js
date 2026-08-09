@@ -16,6 +16,8 @@ import {
   runStartedInRecoveryWindow,
 } from '../services/automation-schedule.js';
 import { runDailyRssDigest } from '../services/rss-digest-runner.js';
+import { kyivWeekKey } from '../services/apify-marketplace.js';
+import { runWeeklyMarketplaceReport } from '../services/weekly-marketplace-report.js';
 import { publishDigest } from '../services/publishers/index.js';
 import { sendMessage } from '../services/telegram-bot.js';
 import { redactSecrets, safeErrorMessage } from '../security/redact.js';
@@ -41,6 +43,19 @@ function requireDailyTriggerSecret(req, res, next) {
 
   if (!safeSecretMatch(req.get('x-n8n-daily-secret'), expected)) {
     return res.status(401).json({ ok: false, error: 'Invalid daily trigger authentication' });
+  }
+
+  return next();
+}
+
+function requireWeeklyTriggerSecret(req, res, next) {
+  const expected = config.n8nWeeklyTriggerSecret;
+  if (!expected) {
+    return res.status(503).json({ ok: false, error: 'Weekly trigger authentication is not configured' });
+  }
+
+  if (!safeSecretMatch(req.get('x-n8n-weekly-secret'), expected)) {
+    return res.status(401).json({ ok: false, error: 'Invalid weekly trigger authentication' });
   }
 
   return next();
@@ -77,6 +92,7 @@ function configuredSecrets() {
   return [
     config.apiSecretKey,
     config.n8nDailyTriggerSecret,
+    config.n8nWeeklyTriggerSecret,
     config.telegramBotToken,
     config.telegramWebhookSecret,
     config.anthropicApiKey,
@@ -335,6 +351,94 @@ async function executeAutomationAlert(req, res) {
   });
 }
 
+async function executeWeeklyMarketplace(req, res) {
+  const runKey = `weekly-market:${kyivWeekKey()}`;
+  const claim = claimAutomationRun(runKey, 'weekly-market');
+  if (!claim.claimed) {
+    const published = claim.run?.status === 'published';
+    return res.status(published ? 200 : 409).json({
+      ok: published,
+      skipped: true,
+      reason: claim.run?.status || claim.reason,
+      runKey,
+      telegramMessageIds: JSON.parse(claim.run?.telegram_message_ids || '[]'),
+    });
+  }
+
+  updateAutomationRun(claim.run.id, { status: 'running', stage: 'collecting' });
+  try {
+    const result = await runWeeklyMarketplaceReport();
+    const telegram = result.telegram;
+    const metrics = {
+      weekKey: result.weekKey,
+      upworkItems: result.upworkItems,
+      fiverrItems: result.fiverrItems,
+      cached: result.cached,
+      degraded: result.degraded,
+      sourceErrors: result.sourceErrors,
+      sourceDiagnostics: result.sourceDiagnostics,
+      telegramMessageCount: telegram?.messageIds?.length || 0,
+    };
+    const messageIds = JSON.stringify(telegram?.messageIds || []);
+
+    if (!telegram?.ok) {
+      const status = telegram?.retrySafe ? 'failed' : 'partial';
+      updateAutomationRun(claim.run.id, {
+        status,
+        stage: status === 'partial' ? 'delivery_unknown' : 'send_failed',
+        degraded: result.degraded ? 1 : 0,
+        metrics_json: metricsJson(metrics),
+        telegram_message_ids: messageIds,
+        error: telegram?.error || 'Telegram did not confirm weekly report delivery',
+        completed_at: status === 'partial' ? finishedAt() : null,
+      });
+      return res.status(status === 'failed' ? 502 : 409).json({
+        ok: false,
+        runKey,
+        state: status,
+        telegram,
+      });
+    }
+
+    updateAutomationRun(claim.run.id, {
+      status: 'published',
+      stage: 'confirmed',
+      degraded: result.degraded ? 1 : 0,
+      metrics_json: metricsJson(metrics),
+      telegram_message_ids: messageIds,
+      error: null,
+      completed_at: finishedAt(),
+    });
+    return res.status(result.degraded ? 200 : 201).json({
+      ok: true,
+      runKey,
+      weekKey: result.weekKey,
+      upworkItems: result.upworkItems,
+      fiverrItems: result.fiverrItems,
+      cached: result.cached,
+      degraded: result.degraded,
+      telegram,
+      sourceErrors: result.sourceErrors,
+    });
+  } catch (error) {
+    const safeError = safeErrorMessage(error, 'Weekly marketplace automation failed', configuredSecrets());
+    updateAutomationRun(claim.run.id, {
+      status: 'failed',
+      stage: 'failed',
+      metrics_json: metricsJson(error.metrics || {}),
+      error: safeError,
+    });
+    console.error('[automation] weekly marketplace error:', safeError);
+    return res.status(error.retryable === false ? 422 : 500).json({
+      ok: false,
+      retryable: error.retryable !== false,
+      runKey,
+      state: 'failed',
+      error: safeError,
+    });
+  }
+}
+
 async function executeDailyWatchdog(req, res) {
   if (!isKyivWatchdogWindow()) {
     return res.status(409).json({
@@ -380,6 +484,7 @@ router.post('/daily-digest', requireDailyTriggerSecret, executeScheduledDigest);
 router.post('/daily-recovery', requireDailyTriggerSecret, executeRecoveryDigest);
 router.post('/daily-watchdog', requireDailyTriggerSecret, executeDailyWatchdog);
 router.post('/alert', requireDailyTriggerSecret, executeAutomationAlert);
+router.post('/weekly-marketplace', requireWeeklyTriggerSecret, executeWeeklyMarketplace);
 router.post('/manual-digest', (req, res) => executeDigest(req, res, 'manual'));
 
 export default router;

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   getArticleCount,
   getDb,
+  getLatestDailyAutomationRun,
   getLatestAutomationRun,
   getLatestPublishedDigest,
 } from '../db/index.js';
@@ -31,7 +32,8 @@ healthDetailsRouter.get('/', (req, res) => {
       error: getArticleCount('error'),
     };
     const latestPublished = getLatestPublishedDigest();
-    const latestRun = getLatestAutomationRun();
+    const latestRun = getLatestDailyAutomationRun();
+    const latestActivity = getLatestAutomationRun();
     const runIsDegraded = ['failed', 'partial'].includes(latestRun?.status);
 
     res.json({
@@ -52,6 +54,14 @@ healthDetailsRouter.get('/', (req, res) => {
         digestId: latestRun.digest_id,
         updatedAt: latestRun.updated_at,
         hasError: Boolean(latestRun.error),
+      } : null,
+      latestActivity: latestActivity ? {
+        runKey: latestActivity.run_key,
+        trigger: latestActivity.trigger,
+        status: latestActivity.status,
+        stage: latestActivity.stage || null,
+        updatedAt: latestActivity.updated_at,
+        hasError: Boolean(latestActivity.error),
       } : null,
       uptime: process.uptime(),
     });

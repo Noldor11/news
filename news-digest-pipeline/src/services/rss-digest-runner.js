@@ -10,7 +10,6 @@ import {
   resetArticlesForRetry,
 } from '../db/index.js';
 import { generateDigest } from './digest-generator.js';
-import { collectApifyMarketplace } from './apify-marketplace.js';
 import { publishDigest } from './publishers/index.js';
 import { resolveHistoricalDuplicates } from './semantic-dedup.js';
 
@@ -54,17 +53,17 @@ const sources = [
   { name: 'TechCrunch Gadgets', category: 'gadgets', url: 'https://techcrunch.com/category/gadgets/feed/' },
   { name: 'Ars Technica Gear & Gadgets', category: 'gadgets', url: 'https://feeds.arstechnica.com/arstechnica/gadgets' },
   { name: 'The Verge Gadgets', category: 'gadgets', url: 'https://www.theverge.com/rss/gadgets/index.xml' },
-  { name: 'Upwork News', category: 'upwork', url: 'https://investors.upwork.com/rss/news-releases.xml' },
   {
     name: 'Google News Upwork Market',
     category: 'upwork',
-    url: 'https://news.google.com/rss/search?q=%22Upwork%22%20(freelance%20OR%20jobs%20OR%20skills%20OR%20demand)%20when%3A7d&hl=en-US&gl=US&ceid=US%3Aen',
+    url: 'https://news.google.com/rss/search?q=%22Upwork%22%20(freelance%20OR%20freelancer%20OR%20hiring%20OR%20jobs%20OR%20demand%20OR%20fees%20OR%20policy)%20-site%3Aupwork.com%20-site%3Ainvestors.upwork.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
+    blockedPublisherDomains: ['upwork.com'],
   },
-  { name: 'Fiverr News', category: 'fiverr', url: 'https://investors.fiverr.com/rss/news-releases.xml' },
   {
     name: 'Google News Fiverr Market',
     category: 'fiverr',
-    url: 'https://news.google.com/rss/search?q=%22Fiverr%22%20(freelance%20OR%20jobs%20OR%20skills%20OR%20demand)%20when%3A7d&hl=en-US&gl=US&ceid=US%3Aen',
+    url: 'https://news.google.com/rss/search?q=%22Fiverr%22%20(freelance%20OR%20freelancer%20OR%20hiring%20OR%20jobs%20OR%20demand%20OR%20fees%20OR%20policy)%20-site%3Afiverr.com%20-site%3Ainvestors.fiverr.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
+    blockedPublisherDomains: ['fiverr.com'],
   },
   { name: 'LinkedIn Pressroom', category: 'linkedin', format: 'linkedin-pressroom', url: 'https://news.linkedin.com/' },
 ];
@@ -289,7 +288,23 @@ function normalizeUrl(value) {
   }
 }
 
-function parseFeed(xml, source) {
+export function isBlockedPublisher(source, publisherUrl) {
+  const blockedDomains = Array.isArray(source?.blockedPublisherDomains)
+    ? source.blockedPublisherDomains
+    : [];
+  if (!blockedDomains.length || !publisherUrl) return false;
+  try {
+    const hostname = new URL(publisherUrl).hostname.toLowerCase().replace(/^www\./, '');
+    return blockedDomains.some((domain) => {
+      const normalized = String(domain || '').toLowerCase().replace(/^www\./, '');
+      return hostname === normalized || hostname.endsWith(`.${normalized}`);
+    });
+  } catch {
+    return false;
+  }
+}
+
+export function parseFeed(xml, source) {
   const sourceName = typeof source === 'string' ? source : source.name;
   const category = typeof source === 'string' ? 'ai-tech' : (source.category || 'ai-tech');
   const blocks = [
@@ -307,8 +322,13 @@ function parseFeed(xml, source) {
       || readTag(block, 'content')
     );
     const publishedAt = readTag(block, 'pubDate') || readTag(block, 'updated') || readTag(block, 'published') || '';
-    return { title, url, summary, publishedAt, source: sourceName, category };
-  }).filter((item) => item.title && item.url && item.summary.length >= 80);
+    const publisher = stripHtml(readTag(block, 'source'));
+    const publisherUrl = normalizeUrl(readAttr(block, 'source', 'url'));
+    return { title, url, summary, publishedAt, source: sourceName, category, publisher, publisherUrl };
+  }).filter((item) => item.title
+    && item.url
+    && item.summary.length >= 80
+    && !isBlockedPublisher(source, item.publisherUrl));
 }
 
 function readClassTag(block, tagName, className) {
@@ -685,21 +705,17 @@ async function selectCandidatesWithSemanticFallback(
 }
 
 async function collectCandidates(settings, excludedUrls = new Set(), priorArticles = []) {
-  const [feedResults, marketplace] = await Promise.all([
-    Promise.all(sources.map(async (source) => {
-      try {
-        return { source, items: await fetchFeed(source, settings.fetchRetries), error: null };
-      } catch (error) {
-        return { source, items: [], error: error.message };
-      }
-    })),
-    collectApifyMarketplace(config),
-  ]);
+  const feedResults = await Promise.all(sources.map(async (source) => {
+    try {
+      return { source, items: await fetchFeed(source, settings.fetchRetries), error: null };
+    } catch (error) {
+      return { source, items: [], error: error.message };
+    }
+  }));
 
   const sourceErrors = feedResults
     .filter((result) => result.error)
-    .map((result) => `${result.source.name}: ${result.error}`)
-    .concat(marketplace.errors);
+    .map((result) => `${result.source.name}: ${result.error}`);
   const sourceDiagnostics = feedResults.map(({ source, items, error }) => {
     const scoredItems = items.map((item) => ({ ...item, meta: scoreItem(item, settings.maxAgeHours) }));
     const fallbackScoredItems = items.map((item) => ({ ...item, meta: scoreItem(item, settings.fallbackMaxAgeHours) }));
@@ -715,7 +731,7 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
       latestPublishedAt: datedItems[0]?.publishedAt || null,
       error,
     };
-  }).concat(marketplace.diagnostics);
+  });
 
   const {
     candidates,
@@ -726,7 +742,7 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
     fallbackUsed,
     effectiveMaxAgeHours,
   } = await selectCandidatesWithSemanticFallback(
-    [...feedResults.flatMap((result) => result.items), ...marketplace.items],
+    feedResults.flatMap((result) => result.items),
     settings,
     excludedUrls,
     priorArticles,

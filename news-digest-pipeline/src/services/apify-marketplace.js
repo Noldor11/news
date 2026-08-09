@@ -95,13 +95,39 @@ function topCounts(values, limit = 6) {
     .map(([key, count]) => `${display.get(key)} (${count})`);
 }
 
-function compactTitles(rows, limit = 3) {
-  return rows
-    .map((row) => String(row.title || '').trim())
-    .filter(Boolean)
+function upworkBudgetLabel(row) {
+  const fixed = Number(row?.fixedPriceAmount?.amount);
+  if (Number.isFinite(fixed) && fixed > 0) return `fixed ${money(fixed)}`;
+  const low = Number(row?.hourlyBudgetMin);
+  const high = Number(row?.hourlyBudgetMax);
+  if (low > 0 || high > 0) return `hourly ${money(low) || '?'}-${money(high) || '?'}`;
+  return 'бюджет не указан';
+}
+
+function upworkHighlights(rows, limit = 3) {
+  return [...rows]
+    .filter((row) => Number.isFinite(Number(row.totalApplicants)))
+    .sort((left, right) => Number(right.totalApplicants) - Number(left.totalApplicants))
     .slice(0, limit)
-    .map((title) => `«${title.slice(0, 120)}»`)
-    .join('; ');
+    .map((row) => ({
+      title: String(row.title || '').trim().slice(0, 160),
+      url: row.url,
+      applicants: Number(row.totalApplicants),
+      budget: upworkBudgetLabel(row),
+    }));
+}
+
+function fiverrHighlights(rows, limit = 3) {
+  return [...rows]
+    .sort((left, right) => Number(right.reviewsCount || 0) - Number(left.reviewsCount || 0))
+    .slice(0, limit)
+    .map((row) => ({
+      title: String(row.title || '').trim().slice(0, 160),
+      url: row.gigUrl,
+      reviews: Number(row.reviewsCount || 0),
+      priceFrom: Number(row.priceFrom) > 0 ? money(Number(row.priceFrom)) : null,
+      sellerLevel: String(row.sellerLevel || '').trim() || null,
+    }));
 }
 
 function dedupeRows(rows, keys) {
@@ -165,11 +191,10 @@ export function buildUpworkSnapshot(rawRows, now = new Date()) {
   }
 
   const summary = [
-    `Публичный ежедневный срез ${rows.length} свежих вакансий Upwork по n8n, Make, Zapier, AI-автоматизации и AI-агентам.`,
+    `Публичный срез ${rows.length} свежих вакансий Upwork по n8n, Make, Zapier, AI-автоматизации и AI-агентам.`,
     skillCounts.length ? `Чаще всего нужны навыки: ${skillCounts.join(', ')}.` : '',
     budgetParts.length ? `По вакансиям с указанной оплатой: ${budgetParts.join('; ')}.` : '',
     applicants.length ? `Медиана уже поданных заявок: ${Math.round(median(applicants))}.` : '',
-    `Примеры свежих запросов: ${compactTitles(rows)}.`,
   ].filter(Boolean).join(' ');
 
   return {
@@ -182,6 +207,14 @@ export function buildUpworkSnapshot(rawRows, now = new Date()) {
       category: 'upwork',
     },
     itemCount: rows.length,
+    highlights: upworkHighlights(rows),
+    metrics: {
+      topSkills: skillCounts,
+      medianFixedBudget: median(fixedBudgets),
+      medianHourlyMin: median(hourlyMins),
+      medianHourlyMax: median(hourlyMaxes),
+      medianApplicants: median(applicants),
+    },
   };
 }
 
@@ -200,7 +233,7 @@ export function buildFiverrSnapshot(rawRows, now = new Date()) {
     prices.length ? `Медианная стартовая цена ${money(median(prices))}.` : '',
     sellerLevels.length ? `Уровни продавцов в выдаче: ${sellerLevels.join(', ')}.` : '',
     reviewed.length ? `${reviewed.length} из ${rows.length} гигов уже имеют отзывы.` : '',
-    `Это срез конкуренции и упаковки услуг, а не прямое измерение клиентского спроса. Примеры: ${compactTitles(rows)}.`,
+    'Это срез конкуренции и упаковки услуг, а не прямое измерение клиентского спроса.',
   ].filter(Boolean).join(' ');
 
   return {
@@ -213,6 +246,12 @@ export function buildFiverrSnapshot(rawRows, now = new Date()) {
       category: 'fiverr',
     },
     itemCount: rows.length,
+    highlights: fiverrHighlights(rows),
+    metrics: {
+      medianStartingPrice: median(prices),
+      sellerLevels,
+      reviewedCount: reviewed.length,
+    },
   };
 }
 
@@ -269,7 +308,7 @@ async function cachedActorSnapshot({
   const cached = getMarketplaceSnapshot(snapshotKey);
   if (cached?.payload?.item) {
     return {
-      item: cached.payload.item,
+      ...cached.payload,
       itemCount: cached.item_count,
       cached: true,
     };
@@ -396,4 +435,91 @@ export async function collectApifyMarketplace(appConfig, {
 
   await Promise.all(jobs);
   return { items, diagnostics, errors };
+}
+
+export async function collectWeeklyMarketplace(appConfig, {
+  now = new Date(),
+  fetchImpl = fetch,
+} = {}) {
+  const weekKey = kyivWeekKey(now);
+  if (!appConfig.apifyWeeklyMarketEnabled) {
+    return {
+      weekKey,
+      disabled: true,
+      upwork: null,
+      fiverr: null,
+      diagnostics: [],
+      errors: [],
+    };
+  }
+
+  const token = appConfig.apifyApiToken;
+  if (!token) {
+    return {
+      weekKey,
+      disabled: false,
+      upwork: null,
+      fiverr: null,
+      diagnostics: [],
+      errors: ['APIFY_API_TOKEN is not configured'],
+    };
+  }
+
+  const upworkLimit = clampInteger(appConfig.apifyUpworkMaxItems, 30, 1, 100);
+  const fiverrLimit = clampInteger(appConfig.apifyFiverrMaxItems, 30, 1, 100);
+  const fiverrQueries = (appConfig.apifyFiverrQueries || []).slice(0, 3);
+  const jobs = [
+    cachedActorSnapshot({
+      snapshotKey: `weekly:upwork:${weekKey}`,
+      source: 'upwork-weekly',
+      actorId: UPWORK_ACTOR,
+      input: {
+        keywords: appConfig.apifyUpworkKeywords,
+        sort: 'recency',
+        limit: upworkLimit,
+      },
+      token,
+      memory: 128,
+      buildSnapshot: buildUpworkSnapshot,
+      now,
+      fetchImpl,
+    }),
+    cachedActorSnapshot({
+      snapshotKey: `weekly:fiverr:${weekKey}`,
+      source: 'fiverr-weekly',
+      actorId: FIVERR_ACTOR,
+      input: {
+        searchQueries: fiverrQueries,
+        scrapeDetails: false,
+        maxItems: fiverrLimit,
+        maxItemsPerSearch: Math.max(1, Math.ceil(fiverrLimit / Math.max(1, fiverrQueries.length))),
+        maxConcurrency: 4,
+        maxRequestRetries: 5,
+      },
+      token,
+      memory: 512,
+      buildSnapshot: buildFiverrSnapshot,
+      now,
+      fetchImpl,
+    }),
+  ];
+
+  const [upworkResult, fiverrResult] = await Promise.allSettled(jobs);
+  const upwork = upworkResult.status === 'fulfilled' ? upworkResult.value : null;
+  const fiverr = fiverrResult.status === 'fulfilled' ? fiverrResult.value : null;
+  const errors = [];
+  if (upworkResult.status === 'rejected') errors.push(`Upwork: ${upworkResult.reason?.message || 'collection failed'}`);
+  if (fiverrResult.status === 'rejected') errors.push(`Fiverr: ${fiverrResult.reason?.message || 'collection failed'}`);
+
+  return {
+    weekKey,
+    disabled: false,
+    upwork,
+    fiverr,
+    diagnostics: [
+      diagnostic('Apify Upwork Weekly Research', 'upwork', upwork || {}, errors.find((error) => error.startsWith('Upwork:')) || null),
+      diagnostic('Apify Fiverr Weekly Research', 'fiverr', fiverr || {}, errors.find((error) => error.startsWith('Fiverr:')) || null),
+    ],
+    errors,
+  };
 }

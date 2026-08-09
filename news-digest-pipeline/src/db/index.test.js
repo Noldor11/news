@@ -4,6 +4,8 @@ import {
   getDb,
   getAutomationRun,
   getAutomationRunByKey,
+  getLatestAutomationRun,
+  getLatestDailyAutomationRun,
   initDb,
   recordDuplicateArticle,
   updateAutomationRun,
@@ -94,6 +96,20 @@ describeWithNativeDatabase('article duplicate audit fields', () => {
       event_fingerprint: 'event-123',
       duplicate_of: 'https://example.com/original-story',
       duplicate_reason: 'recent-event',
+    });
+  });
+
+  it('keeps a failed manual run separate from daily production health', () => {
+    const daily = claimAutomationRun('daily-rss:2026-08-09', 'schedule');
+    updateAutomationRun(daily.run.id, { status: 'published', stage: 'confirmed' });
+    const manual = claimAutomationRun('manual-rss:2026-08-09:test', 'manual');
+    updateAutomationRun(manual.run.id, { status: 'failed', stage: 'failed', error: 'test failure' });
+
+    expect(getLatestAutomationRun()).toMatchObject({ id: manual.run.id, trigger: 'manual' });
+    expect(getLatestDailyAutomationRun()).toMatchObject({
+      id: daily.run.id,
+      trigger: 'schedule',
+      status: 'published',
     });
   });
 });

@@ -3,6 +3,7 @@ import {
   classifyArticleCount,
   isGadgetItem,
   isFreshTechItem,
+  parseFeed,
   parseLinkedInPressroom,
   resolveRssSettings,
   scoreItem,
@@ -24,6 +25,37 @@ const baseItem = (overrides = {}) => ({
 });
 
 describe('RSS selection quality gates', () => {
+  it('rejects official marketplace publishers from third-party Google News lanes', () => {
+    const xml = `
+      <rss><channel>
+        <item>
+          <title>Upwork publishes an official corporate update</title>
+          <link>https://news.google.com/rss/articles/official</link>
+          <description>This official release contains enough marketplace and technology text to pass the normal minimum summary length filter.</description>
+          <pubDate>${freshDate}</pubDate>
+          <source url="https://investors.upwork.com">Upwork</source>
+        </item>
+        <item>
+          <title>Independent outlet examines freelance demand on Upwork</title>
+          <link>https://news.google.com/rss/articles/independent</link>
+          <description>This independent report contains enough marketplace and technology text to pass the normal minimum summary length filter.</description>
+          <pubDate>${freshDate}</pubDate>
+          <source url="https://example.com">Independent Tech</source>
+        </item>
+      </channel></rss>`;
+    const items = parseFeed(xml, {
+      name: 'Google News Upwork Market',
+      category: 'upwork',
+      blockedPublisherDomains: ['upwork.com'],
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      publisher: 'Independent Tech',
+      publisherUrl: 'https://example.com/',
+    });
+  });
+
   it('uses the 23-25 article policy with five gadget and one platform slot by default', () => {
     expect(resolveRssSettings({})).toMatchObject({
       minArticles: 23,
