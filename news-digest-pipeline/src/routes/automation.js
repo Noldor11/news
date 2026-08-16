@@ -137,6 +137,7 @@ function setTelegramRunResult(runId, digestId, telegram, result = {}) {
     publicationMode: result.publicationMode || null,
     fallbackUsed: Boolean(result.fallbackUsed),
     effectiveMaxAgeHours: result.effectiveMaxAgeHours ?? null,
+    recoveryMode: Boolean(result.recoveryMode),
     telegramMessageCount: telegram?.messageIds?.length || 0,
   };
 
@@ -226,6 +227,7 @@ async function executeDigest(req, res, trigger) {
     const result = claim.run.digest_id
       ? await resumeSafeTelegramPublish(claim.run)
       : await runDailyRssDigest({
+        recoveryMode: trigger === 'recovery',
         onProgress: async (stage, metrics) => {
           updateAutomationRun(claim.run.id, {
             stage,
@@ -284,6 +286,7 @@ async function executeDigest(req, res, trigger) {
       selected: result.selected,
       duplicates: result.duplicates,
       degraded: Boolean(result.degraded),
+      recoveryMode: Boolean(result.recoveryMode),
       publicationMode: result.publicationMode || 'full',
       resumed: Boolean(result.resumed),
       telegram,

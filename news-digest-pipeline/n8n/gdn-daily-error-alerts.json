@@ -1,0 +1,75 @@
+[
+  {
+    "id": "YaKxrjhxSZPF7Zzp",
+    "name": "GDN Daily Error Alerts",
+    "active": true,
+    "nodes": [
+      {
+        "id": "2b032f2d-7c03-471e-9af2-0762a3b8800f",
+        "name": "Workflow Error Trigger",
+        "type": "n8n-nodes-base.errorTrigger",
+        "typeVersion": 1,
+        "position": [
+          0,
+          0
+        ],
+        "parameters": {}
+      },
+      {
+        "id": "e6c48e51-d41e-40e9-8861-589a28b4f9d3",
+        "name": "Send GDN Error Alert",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          280,
+          0
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://news-digest-app-production-9938.up.railway.app/api/automation/alert",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.NEWS_DIGEST_API_KEY }}"
+              },
+              {
+                "name": "X-N8N-Daily-Secret",
+                "value": "={{ $env.NEWS_DIGEST_DAILY_SECRET }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "contentType": "raw",
+          "rawContentType": "application/json",
+          "body": "={{ JSON.stringify({ event: 'workflow_error', detail: ['Workflow: ' + ($json.workflow?.name || 'unknown'), 'Execution: ' + ($json.execution?.id || 'unknown'), 'Node: ' + ($json.execution?.lastNodeExecuted || 'unknown'), 'Error: ' + ($json.execution?.error?.message || $json.error?.message || 'No error message'), $json.execution?.url ? 'URL: ' + $json.execution.url : null].filter(Boolean).join('\\n') }) }}",
+          "options": {
+            "timeout": 900000
+          }
+        },
+        "retryOnFail": false
+      }
+    ],
+    "connections": {
+      "Workflow Error Trigger": {
+        "main": [
+          [
+            {
+              "node": "Send GDN Error Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "timezone": "Europe/Kiev"
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {}
+  }
+]

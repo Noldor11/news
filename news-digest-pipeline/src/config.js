@@ -117,6 +117,8 @@ function buildConfig() {
     rssMaxArticleAgeHours: parseInt(process.env.RSS_MAX_ARTICLE_AGE_HOURS || '36', 10),
     rssFallbackMaxArticleAgeHours: parseInt(process.env.RSS_FALLBACK_MAX_ARTICLE_AGE_HOURS || '72', 10),
     rssMaxArticlesPerSource: parseInt(process.env.RSS_MAX_ARTICLES_PER_SOURCE || '3', 10),
+    rssRecoveryMaxArticleAgeHours: parseInt(process.env.RSS_RECOVERY_MAX_ARTICLE_AGE_HOURS || '120', 10),
+    rssRecoveryMaxArticlesPerSource: parseInt(process.env.RSS_RECOVERY_MAX_ARTICLES_PER_SOURCE || '4', 10),
     rssFetchRetries: parseInt(process.env.RSS_FETCH_RETRIES || '2', 10),
     semanticDedupEnabled: process.env.SEMANTIC_DEDUP_ENABLED !== 'false',
     semanticDedupHistoryDays: parseInt(process.env.SEMANTIC_DEDUP_HISTORY_DAYS || '30', 10),

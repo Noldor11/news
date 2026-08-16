@@ -105,6 +105,35 @@ describe('RSS selection quality gates', () => {
     expect(result.candidates).toHaveLength(2);
   });
 
+  it('widens only recovery collection without lowering the hard floor', () => {
+    const appConfig = {
+      minArticlesPerDigest: 23,
+      hardMinArticlesPerDigest: 15,
+      maxArticlesPerDigest: 25,
+      rssMaxArticleAgeHours: 36,
+      rssFallbackMaxArticleAgeHours: 72,
+      rssMaxArticlesPerSource: 3,
+      rssRecoveryMaxArticleAgeHours: 120,
+      rssRecoveryMaxArticlesPerSource: 4,
+    };
+
+    const daily = resolveRssSettings(appConfig);
+    const recovery = resolveRssSettings(appConfig, { recoveryMode: true });
+
+    expect(daily).toMatchObject({
+      hardMinArticles: 15,
+      fallbackMaxAgeHours: 72,
+      maxPerSource: 3,
+      recoveryMode: false,
+    });
+    expect(recovery).toMatchObject({
+      hardMinArticles: 15,
+      fallbackMaxAgeHours: 120,
+      maxPerSource: 4,
+      recoveryMode: true,
+    });
+  });
+
   it('rejects stale and primarily political candidates', () => {
     const stale = scoreItem(baseItem({
       publishedAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toUTCString(),

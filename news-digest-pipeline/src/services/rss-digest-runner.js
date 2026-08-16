@@ -21,6 +21,8 @@ const DEFAULT_MARKETPLACE_ARTICLES = 1;
 const DEFAULT_MAX_AGE_HOURS = 36;
 const DEFAULT_FALLBACK_MAX_AGE_HOURS = 72;
 const DEFAULT_MAX_PER_SOURCE = 3;
+const DEFAULT_RECOVERY_MAX_AGE_HOURS = 120;
+const DEFAULT_RECOVERY_MAX_PER_SOURCE = 4;
 const DEFAULT_FETCH_RETRIES = 2;
 const FETCH_CANDIDATES = 80;
 const FEED_TIMEOUT_MS = 15000;
@@ -134,7 +136,7 @@ function clampInteger(value, fallback, min, max) {
   return Math.min(max, Math.max(min, parsed));
 }
 
-export function resolveRssSettings(appConfig = config) {
+export function resolveRssSettings(appConfig = config, { recoveryMode = false } = {}) {
   const maxArticles = clampInteger(appConfig.maxArticlesPerDigest, DEFAULT_MAX_ARTICLES, 1, 30);
   const minArticles = Math.min(
     maxArticles,
@@ -151,7 +153,7 @@ export function resolveRssSettings(appConfig = config) {
     1,
     168,
   );
-  const fallbackMaxAgeHours = Math.max(
+  const regularFallbackMaxAgeHours = Math.max(
     maxAgeHours,
     clampInteger(
       appConfig.rssFallbackMaxArticleAgeHours,
@@ -160,6 +162,34 @@ export function resolveRssSettings(appConfig = config) {
       168,
     ),
   );
+  const regularMaxPerSource = clampInteger(
+    appConfig.rssMaxArticlesPerSource,
+    DEFAULT_MAX_PER_SOURCE,
+    1,
+    maxArticles,
+  );
+  const fallbackMaxAgeHours = recoveryMode
+    ? Math.max(
+      regularFallbackMaxAgeHours,
+      clampInteger(
+        appConfig.rssRecoveryMaxArticleAgeHours,
+        DEFAULT_RECOVERY_MAX_AGE_HOURS,
+        regularFallbackMaxAgeHours,
+        168,
+      ),
+    )
+    : regularFallbackMaxAgeHours;
+  const maxPerSource = recoveryMode
+    ? Math.max(
+      regularMaxPerSource,
+      clampInteger(
+        appConfig.rssRecoveryMaxArticlesPerSource,
+        DEFAULT_RECOVERY_MAX_PER_SOURCE,
+        regularMaxPerSource,
+        maxArticles,
+      ),
+    )
+    : regularMaxPerSource;
 
   return {
     minArticles,
@@ -167,7 +197,8 @@ export function resolveRssSettings(appConfig = config) {
     maxArticles,
     maxAgeHours,
     fallbackMaxAgeHours,
-    maxPerSource: clampInteger(appConfig.rssMaxArticlesPerSource, DEFAULT_MAX_PER_SOURCE, 1, maxArticles),
+    maxPerSource,
+    recoveryMode,
     gadgetArticlesPerDigest: clampInteger(
       appConfig.gadgetArticlesPerDigest,
       DEFAULT_GADGET_ARTICLES,
@@ -763,6 +794,7 @@ async function collectCandidates(settings, excludedUrls = new Set(), priorArticl
         publicationMode,
         fallbackUsed,
         effectiveMaxAgeHours,
+        recoveryMode: settings.recoveryMode,
       },
     );
   }
@@ -849,8 +881,8 @@ function storageUrlForCandidate(db, item) {
  * Collect, generate, and publish one daily RSS digest. The automation route
  * owns the run lock; this function remains usable for a controlled manual job.
  */
-export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
-  const settings = resolveRssSettings();
+export async function runDailyRssDigest({ onDigestReady, onProgress, recoveryMode = false } = {}) {
+  const settings = resolveRssSettings(config, { recoveryMode });
   const db = getDb();
   const { excludedUrls, priorArticles } = getDedupHistory(db);
   const {
@@ -881,6 +913,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
       publicationMode: collectedMode,
       fallbackUsed,
       effectiveMaxAgeHours,
+      recoveryMode: settings.recoveryMode,
     });
   }
   const selectedArticleIds = [];
@@ -1028,6 +1061,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress } = {}) {
     preferredMinimum: settings.minArticles,
     fallbackUsed,
     effectiveMaxAgeHours,
+    recoveryMode: settings.recoveryMode,
     hardMinimum: settings.hardMinArticles,
     sourceDiagnostics,
     laneStats,
