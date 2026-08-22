@@ -22,9 +22,9 @@ const DEFAULT_WORK_MARKET_ARTICLES = 7;
 const DEFAULT_WORK_MARKET_MAX_AGE_HOURS = 36;
 const DEFAULT_MAX_AGE_HOURS = 36;
 const DEFAULT_FALLBACK_MAX_AGE_HOURS = 72;
-const DEFAULT_MAX_PER_SOURCE = 3;
+const DEFAULT_MAX_PER_SOURCE = 2;
 const DEFAULT_RECOVERY_MAX_AGE_HOURS = 120;
-const DEFAULT_RECOVERY_MAX_PER_SOURCE = 4;
+const DEFAULT_RECOVERY_MAX_PER_SOURCE = 2;
 const DEFAULT_FETCH_RETRIES = 2;
 const FETCH_CANDIDATES = 80;
 const FEED_TIMEOUT_MS = 15000;
@@ -40,71 +40,112 @@ const strictFreelanceFeedTerms = [
   'freelance', 'freelancer', 'gig economy', 'independent work', 'contractor', 'contingent workforce',
   'talent marketplace', 'creator economy', 'upwork', 'fiverr',
 ];
+const blockedSocialPublisherDomains = [
+  'facebook.com',
+  'instagram.com',
+  'linkedin.com',
+  'quora.com',
+  'reddit.com',
+  'threads.net',
+  'tiktok.com',
+  'twitter.com',
+  'x.com',
+  'youtube.com',
+];
 
-const sources = [
-  { name: 'TechCrunch AI', url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },
+export const sources = [
+  { name: 'TechCrunch AI', brand: 'TechCrunch', url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },
   { name: 'VentureBeat AI', url: 'https://venturebeat.com/category/ai/feed/' },
-  { name: 'The Verge AI', url: 'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml' },
-  { name: 'Ars Technica', url: 'https://feeds.arstechnica.com/arstechnica/technology-lab' },
+  { name: 'The Verge AI', brand: 'The Verge', url: 'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml' },
+  { name: 'Ars Technica', brand: 'Ars Technica', url: 'https://feeds.arstechnica.com/arstechnica/technology-lab' },
   { name: 'MIT News AI', url: 'https://news.mit.edu/topic/mitartificial-intelligence2-rss.xml' },
   { name: 'OpenAI News', url: 'https://openai.com/news/rss.xml' },
-  { name: 'Google AI Blog', url: 'https://blog.google/technology/ai/rss/' },
+  { name: 'Google AI Blog', brand: 'Google', url: 'https://blog.google/technology/ai/rss/' },
   { name: 'NVIDIA Blog', url: 'https://blogs.nvidia.com/feed/' },
   { name: 'Hugging Face', url: 'https://huggingface.co/blog/feed.xml' },
   { name: 'Wired AI', url: 'https://www.wired.com/feed/tag/ai/latest/rss' },
-  { name: 'AWS Machine Learning', url: 'https://aws.amazon.com/blogs/machine-learning/feed/' },
   { name: 'ZDNet AI', url: 'https://www.zdnet.com/topic/artificial-intelligence/rss.xml' },
-  { name: 'IEEE Spectrum AI', url: 'https://spectrum.ieee.org/feeds/topic/artificial-intelligence.rss' },
+  { name: 'IEEE Spectrum AI', brand: 'IEEE Spectrum', url: 'https://spectrum.ieee.org/feeds/topic/artificial-intelligence.rss' },
   { name: 'MIT Technology Review AI', url: 'https://www.technologyreview.com/topic/artificial-intelligence/feed/' },
   { name: '404 Media', url: 'https://www.404media.co/rss/' },
-  { name: 'Google Research', url: 'https://research.google/blog/rss/' },
+  { name: 'Google DeepMind', brand: 'Google', url: 'https://deepmind.google/blog/rss.xml' },
+  {
+    name: 'Google Research',
+    brand: 'Google',
+    url: 'https://research.google/blog/rss/',
+    minSummaryLength: 0,
+    enrichArticleSummary: true,
+  },
   { name: 'Microsoft Research', url: 'https://www.microsoft.com/en-us/research/feed/' },
+  { name: 'The Decoder', url: 'https://the-decoder.com/feed/' },
   { name: 'Simon Willison', url: 'https://simonwillison.net/atom/everything/' },
+  { name: 'BBC Technology', url: 'https://feeds.bbci.co.uk/news/technology/rss.xml' },
+  { name: 'The Register AI/ML', url: 'https://www.theregister.com/software/ai_ml/headlines.atom' },
   // Official engineering/research feeds widen the pool without introducing a
   // generic news search that could pull politics or low-quality reposts.
-  { name: 'GitHub Blog', url: 'https://github.blog/feed/' },
-  { name: 'GitHub Changelog', url: 'https://github.blog/changelog/feed/' },
+  { name: 'GitHub Blog', brand: 'GitHub', url: 'https://github.blog/feed/' },
+  { name: 'GitHub Changelog', brand: 'GitHub', url: 'https://github.blog/changelog/feed/' },
   { name: 'Mozilla Hacks', url: 'https://hacks.mozilla.org/feed/' },
   { name: 'Meta Engineering', url: 'https://engineering.fb.com/feed/' },
-  { name: 'Google Developers Blog', url: 'https://developers.googleblog.com/feeds/posts/default?alt=rss' },
+  { name: 'Google Developers Blog', brand: 'Google', url: 'https://developers.googleblog.com/feeds/posts/default?alt=rss' },
   { name: 'Cloudflare Blog', url: 'https://blog.cloudflare.com/rss/' },
-  { name: 'TechCrunch Security', url: 'https://techcrunch.com/category/security/feed/' },
+  { name: 'TechCrunch Security', brand: 'TechCrunch', url: 'https://techcrunch.com/category/security/feed/' },
+  { name: 'BleepingComputer', url: 'https://www.bleepingcomputer.com/feed/' },
+  { name: 'SecurityWeek', url: 'https://www.securityweek.com/feed/' },
+  { name: 'The Hacker News', url: 'https://thehackernews.com/feeds/posts/default' },
+  { name: 'Krebs on Security', url: 'https://krebsonsecurity.com/feed/' },
+  { name: 'InfoQ', url: 'https://feed.infoq.com/' },
+  { name: 'Docker Blog', url: 'https://www.docker.com/blog/feed/' },
+  { name: 'Stack Overflow Blog', url: 'https://stackoverflow.blog/feed/' },
+  { name: 'The New Stack', url: 'https://thenewstack.io/feed/' },
   { name: 'Hackaday', category: 'gadgets', url: 'https://hackaday.com/blog/feed/' },
-  { name: 'TechCrunch Gadgets', category: 'gadgets', url: 'https://techcrunch.com/category/gadgets/feed/' },
-  { name: 'Ars Technica Gear & Gadgets', category: 'gadgets', url: 'https://feeds.arstechnica.com/arstechnica/gadgets' },
-  { name: 'The Verge Gadgets', category: 'gadgets', url: 'https://www.theverge.com/rss/gadgets/index.xml' },
+  { name: 'TechCrunch Gadgets', brand: 'TechCrunch', category: 'gadgets', url: 'https://techcrunch.com/category/gadgets/feed/' },
+  { name: 'Ars Technica Gear & Gadgets', brand: 'Ars Technica', category: 'gadgets', url: 'https://feeds.arstechnica.com/arstechnica/gadgets' },
+  { name: 'The Verge Gadgets', brand: 'The Verge', category: 'gadgets', url: 'https://www.theverge.com/rss/gadgets/index.xml' },
   { name: 'Engadget', category: 'gadgets', url: 'https://www.engadget.com/rss.xml' },
-  { name: 'Apple Newsroom', category: 'gadgets', url: 'https://www.apple.com/newsroom/rss-feed.rss' },
+  { name: '9to5Google', category: 'gadgets', url: 'https://9to5google.com/feed/' },
+  { name: 'Android Authority', category: 'gadgets', url: 'https://www.androidauthority.com/feed/' },
+  { name: 'MacRumors', category: 'gadgets', url: 'https://feeds.macrumors.com/MacRumors-Front' },
+  { name: 'GSMArena', category: 'gadgets', url: 'https://www.gsmarena.com/rss-news-reviews.php3' },
+  { name: 'The Robot Report', category: 'gadgets', url: 'https://www.therobotreport.com/feed/' },
+  { name: 'IEEE Spectrum Robotics', brand: 'IEEE Spectrum', category: 'gadgets', url: 'https://spectrum.ieee.org/feeds/topic/robotics.rss' },
   {
     name: 'Google News Upwork Market',
     category: 'upwork',
+    usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=%22Upwork%22%20(freelance%20OR%20freelancer%20OR%20hiring%20OR%20jobs%20OR%20demand%20OR%20fees%20OR%20policy)%20-site%3Aupwork.com%20-site%3Ainvestors.upwork.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
-    blockedPublisherDomains: ['upwork.com'],
+    blockedPublisherDomains: ['upwork.com', ...blockedSocialPublisherDomains],
   },
   {
     name: 'Google News Fiverr Market',
     category: 'fiverr',
+    usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=%22Fiverr%22%20(freelance%20OR%20freelancer%20OR%20hiring%20OR%20jobs%20OR%20demand%20OR%20fees%20OR%20policy)%20-site%3Afiverr.com%20-site%3Ainvestors.fiverr.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
-    blockedPublisherDomains: ['fiverr.com'],
+    blockedPublisherDomains: ['fiverr.com', ...blockedSocialPublisherDomains],
   },
   {
     name: 'Google News LinkedIn Work Market',
     category: 'linkedin',
+    usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=%22LinkedIn%22%20(hiring%20OR%20jobs%20OR%20freelance%20OR%20workforce%20OR%20AI%20OR%20automation)%20-site%3Alinkedin.com%20-site%3Anews.linkedin.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
-    blockedPublisherDomains: ['linkedin.com'],
+    blockedPublisherDomains: blockedSocialPublisherDomains,
   },
   { name: 'LinkedIn Pressroom', category: 'linkedin', format: 'linkedin-pressroom', url: 'https://news.linkedin.com/' },
   {
     name: 'Google News Freelance Market',
     category: 'freelance-market',
+    usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=(%22freelance%20market%22%20OR%20%22gig%20economy%22%20OR%20%22independent%20work%22%20OR%20%22contingent%20workforce%22)%20(AI%20OR%20automation%20OR%20hiring%20OR%20demand%20OR%20rates%20OR%20jobs)%20when%3A2d&hl=en-US&gl=US&ceid=US%3Aen',
     requiredAnyTerms: workMarketFeedTerms,
+    blockedPublisherDomains: blockedSocialPublisherDomains,
   },
   {
     name: 'Google News AI Automation Work',
     category: 'freelance-market',
+    usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=(%22AI%20automation%22%20OR%20%22AI%20agents%22%20OR%20n8n%20OR%20Zapier%20OR%20%22Make.com%22)%20(freelance%20OR%20jobs%20OR%20hiring%20OR%20demand%20OR%20skills)%20when%3A2d&hl=en-US&gl=US&ceid=US%3Aen',
     requiredAnyTerms: workMarketFeedTerms,
+    blockedPublisherDomains: blockedSocialPublisherDomains,
   },
   {
     name: 'Indeed Hiring Lab',
@@ -114,12 +155,14 @@ const sources = [
   },
   {
     name: 'Allwork Space Workforce',
+    brand: 'Allwork Space',
     category: 'freelance-market',
     url: 'https://allwork.space/category/workforce/feed/',
     requiredAnyTerms: workMarketFeedTerms,
   },
   {
     name: 'Allwork Space Tech',
+    brand: 'Allwork Space',
     category: 'freelance-market',
     url: 'https://allwork.space/category/tech/feed/',
     requiredAnyTerms: workMarketFeedTerms,
@@ -435,6 +478,9 @@ function matchesRequiredSourceTerms(item, source) {
 export function parseFeed(xml, source) {
   const sourceName = typeof source === 'string' ? source : source.name;
   const category = typeof source === 'string' ? 'ai-tech' : (source.category || 'ai-tech');
+  const minSummaryLength = typeof source === 'string'
+    ? 80
+    : Math.max(0, Number(source.minSummaryLength ?? 80));
   const blocks = [
     ...(xml.match(/<item\b[\s\S]*?<\/item>/gi) || []),
     ...(xml.match(/<entry\b[\s\S]*?<\/entry>/gi) || []),
@@ -452,12 +498,79 @@ export function parseFeed(xml, source) {
     const publishedAt = readTag(block, 'pubDate') || readTag(block, 'updated') || readTag(block, 'published') || '';
     const publisher = stripHtml(readTag(block, 'source'));
     const publisherUrl = normalizeUrl(readAttr(block, 'source', 'url'));
-    return { title, url, summary, publishedAt, source: sourceName, category, publisher, publisherUrl };
+    const sourceBrand = source?.usePublisherAsBrand
+      ? (publisher || source.brand || sourceName)
+      : (source?.brand || sourceName);
+    return {
+      title,
+      url,
+      summary,
+      publishedAt,
+      source: sourceName,
+      sourceBrand,
+      category,
+      publisher,
+      publisherUrl,
+    };
   }).filter((item) => item.title
     && item.url
-    && item.summary.length >= 80
+    && item.summary.length >= minSummaryLength
     && !isBlockedPublisher(source, item.publisherUrl)
     && matchesRequiredSourceTerms(item, source));
+}
+
+export function extractMetaDescription(html) {
+  const tags = String(html || '').match(/<meta\b[^>]*>/gi) || [];
+  const descriptions = new Map();
+  for (const tag of tags) {
+    const key = (readAttr(tag, 'meta', 'name') || readAttr(tag, 'meta', 'property')).toLowerCase();
+    const content = stripHtml(readAttr(tag, 'meta', 'content'));
+    if (key && content) descriptions.set(key, content);
+  }
+  return descriptions.get('description')
+    || descriptions.get('og:description')
+    || descriptions.get('twitter:description')
+    || '';
+}
+
+export function extractArticleLead(html) {
+  const paragraphs = String(html || '').match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) || [];
+  return paragraphs
+    .map((paragraph) => stripHtml(paragraph))
+    .find((paragraph) => paragraph.length >= 80 && paragraph.length <= 1200)
+    || '';
+}
+
+async function hydrateShortSummaries(items, source) {
+  const limit = clampInteger(source.summaryEnrichmentLimit, 12, 1, 20);
+  const candidates = items.slice(0, limit);
+  const hydrated = await Promise.all(candidates.map(async (item) => {
+    if (item.summary.length >= 80) return item;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FEED_TIMEOUT_MS);
+    try {
+      const response = await fetch(item.url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; GDN/1.0)',
+          Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        },
+      });
+      if (!response.ok) return null;
+      const html = await response.text();
+      const summary = extractMetaDescription(html) || extractArticleLead(html);
+      return summary.length >= 80 ? { ...item, summary } : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }));
+
+  return [
+    ...hydrated.filter(Boolean),
+    ...items.slice(limit).filter((item) => item.summary.length >= 80),
+  ];
 }
 
 function readClassTag(block, tagName, className) {
@@ -492,7 +605,15 @@ export function parseLinkedInPressroom(html, source = { name: 'LinkedIn Pressroo
     const publishedAt = readAttr(block, 'time', 'datetime')
       || stripHtml(readClassTag(block, 'time', 'date'))
       || stripHtml(readClassTag(block, 'time', 'cmp-post-card__date'));
-    return { title, url, summary, publishedAt, source: sourceName, category };
+    return {
+      title,
+      url,
+      summary,
+      publishedAt,
+      source: sourceName,
+      sourceBrand: source?.brand || sourceName,
+      category,
+    };
   }).filter((item) => item && item.title && item.url && item.summary.length >= 80);
 }
 
@@ -609,6 +730,7 @@ export function selectDiverseCandidatesDetailed(items, settings = {}) {
   const sourceCounts = settings.initialSourceCounts instanceof Map
     ? new Map(settings.initialSourceCounts)
     : new Map(Object.entries(settings.initialSourceCounts || {}));
+  const sourceKey = (item) => item.sourceBrand || item.source;
 
   const ranked = items
     .map((item) => ({ ...item, meta: item.meta || scoreItem(item, maxAgeHours) }))
@@ -617,7 +739,8 @@ export function selectDiverseCandidatesDetailed(items, settings = {}) {
 
   for (const item of ranked) {
     if (selected.length >= limit || seenUrls.has(item.url) || excludedUrls.has(item.url)) continue;
-    if ((sourceCounts.get(item.source) || 0) >= maxPerSource) continue;
+    const brand = sourceKey(item);
+    if ((sourceCounts.get(brand) || 0) >= maxPerSource) continue;
     const match = findEventDuplicate(item, [...priorArticles, ...selected]);
     if (match) {
       rejectedDuplicates.push({
@@ -635,7 +758,7 @@ export function selectDiverseCandidatesDetailed(items, settings = {}) {
     }
 
     seenUrls.add(item.url);
-    sourceCounts.set(item.source, (sourceCounts.get(item.source) || 0) + 1);
+    sourceCounts.set(brand, (sourceCounts.get(brand) || 0) + 1);
     selected.push({ ...item, eventFingerprint: buildEventFingerprint(item) });
   }
 
@@ -711,6 +834,7 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
   let remaining = limit;
   let priorArticles = [...(settings.priorArticles || [])];
   const sourceCounts = new Map();
+  const sourceKey = (item) => item.sourceBrand || item.source;
   const baseExcludedUrls = settings.excludedUrls instanceof Set
     ? settings.excludedUrls
     : new Set(settings.excludedUrls || []);
@@ -737,7 +861,8 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
     selected.push(...laneResult.selected);
     rejectedDuplicates.push(...laneResult.rejectedDuplicates);
     for (const item of laneResult.selected) {
-      sourceCounts.set(item.source, (sourceCounts.get(item.source) || 0) + 1);
+      const brand = sourceKey(item);
+      sourceCounts.set(brand, (sourceCounts.get(brand) || 0) + 1);
     }
     remaining -= laneResult.selected.length;
     priorArticles = [...priorArticles, ...laneResult.selected];
@@ -808,7 +933,7 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
   };
 }
 
-async function fetchFeedOnce(source) {
+export async function fetchFeedOnce(source) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FEED_TIMEOUT_MS);
   try {
@@ -822,7 +947,8 @@ async function fetchFeedOnce(source) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const body = await response.text();
     if (source.format === 'linkedin-pressroom') return parseLinkedInPressroom(body, source);
-    return parseFeed(body, source);
+    const items = parseFeed(body, source);
+    return source.enrichArticleSummary ? hydrateShortSummaries(items, source) : items;
   } finally {
     clearTimeout(timer);
   }

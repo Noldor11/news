@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyArticleCount,
+  extractArticleLead,
+  extractMetaDescription,
   isGadgetItem,
   isFreshTechItem,
   parseFeed,
@@ -11,6 +13,7 @@ import {
   selectCandidatesWithFallback,
   selectDiverseCandidates,
   selectDiverseCandidatesDetailed,
+  sources,
   titleSimilarity,
 } from './rss-digest-runner.js';
 
@@ -25,6 +28,63 @@ const baseItem = (overrides = {}) => ({
 });
 
 describe('RSS selection quality gates', () => {
+  it('contains the complete balanced source package and removes superseded corporate feeds', () => {
+    const expected = [
+      'MIT Technology Review AI',
+      'Google DeepMind',
+      'Google Research',
+      'The Decoder',
+      'Simon Willison',
+      'BBC Technology',
+      'The Register AI/ML',
+      'BleepingComputer',
+      'SecurityWeek',
+      'The Hacker News',
+      'Krebs on Security',
+      'InfoQ',
+      'Docker Blog',
+      'Stack Overflow Blog',
+      'The New Stack',
+      'Engadget',
+      '9to5Google',
+      'Android Authority',
+      'MacRumors',
+      'GSMArena',
+      'The Robot Report',
+      'IEEE Spectrum Robotics',
+    ];
+    const names = new Set(sources.map((source) => source.name));
+
+    expect(expected.every((name) => names.has(name))).toBe(true);
+    expect(names.has('AWS Machine Learning')).toBe(false);
+    expect(names.has('Apple Newsroom')).toBe(false);
+    expect(new Set(sources.map((source) => source.url)).size).toBe(sources.length);
+  });
+
+  it('supports curated feeds whose article descriptions require page enrichment', () => {
+    const xml = `
+      <rss><channel><item>
+        <title>Google Research publishes a new AI model study</title>
+        <link>https://research.google/blog/example/</link>
+        <description>Generative AI</description>
+        <pubDate>${freshDate}</pubDate>
+      </item></channel></rss>`;
+    const items = parseFeed(xml, {
+      name: 'Google Research',
+      minSummaryLength: 0,
+      enrichArticleSummary: true,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(extractMetaDescription(`
+      <meta property="og:description" content="A detailed AI research summary with enough factual context for the digest generator to use safely.">
+    `)).toContain('detailed AI research summary');
+    expect(extractArticleLead(`
+      <p>August 21, 2026</p>
+      <p>We introduce a multi-agent research system that evaluates wearable sensor data with statistical validation and human oversight.</p>
+    `)).toContain('multi-agent research system');
+  });
+
   it('rejects official marketplace publishers from third-party Google News lanes', () => {
     const xml = `
       <rss><channel>
@@ -54,6 +114,43 @@ describe('RSS selection quality gates', () => {
       publisher: 'Independent Tech',
       publisherUrl: 'https://example.com/',
     });
+  });
+
+  it('rejects user-generated social posts from every Google News market lane', () => {
+    const googleNewsMarketSources = sources.filter((source) => source.name.startsWith('Google News '));
+
+    expect(googleNewsMarketSources.length).toBeGreaterThanOrEqual(5);
+    for (const source of googleNewsMarketSources) {
+      expect(source.blockedPublisherDomains).toEqual(expect.arrayContaining([
+        'instagram.com',
+        'linkedin.com',
+        'reddit.com',
+        'youtube.com',
+      ]));
+    }
+
+    const xml = `
+      <rss><channel>
+        <item>
+          <title>Freelancer posts a personal Upwork anecdote</title>
+          <link>https://news.google.com/rss/articles/social</link>
+          <description>This social post contains enough freelance marketplace words to pass the normal summary length filter.</description>
+          <pubDate>${freshDate}</pubDate>
+          <source url="https://www.instagram.com">Instagram</source>
+        </item>
+        <item>
+          <title>Independent outlet measures Upwork hiring demand</title>
+          <link>https://news.google.com/rss/articles/report</link>
+          <description>This independent report contains enough freelance hiring and technology detail to pass the summary length filter.</description>
+          <pubDate>${freshDate}</pubDate>
+          <source url="https://example.com">Independent Tech</source>
+        </item>
+      </channel></rss>`;
+    const source = sources.find((entry) => entry.name === 'Google News Upwork Market');
+    const items = parseFeed(xml, source);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].publisher).toBe('Independent Tech');
   });
 
   it('filters broad feeds with whole-word work-market terms', () => {
@@ -93,8 +190,12 @@ describe('RSS selection quality gates', () => {
       workMarketMaxAgeHours: 36,
       maxAgeHours: 36,
       fallbackMaxAgeHours: 72,
-      maxPerSource: 3,
+      maxPerSource: 2,
       fetchRetries: 2,
+    });
+    expect(resolveRssSettings({}, { recoveryMode: true })).toMatchObject({
+      maxPerSource: 2,
+      recoveryMode: true,
     });
   });
 
@@ -192,6 +293,31 @@ describe('RSS selection quality gates', () => {
     expect(selected.filter((item) => ['https://a.example/1', 'https://a.example/2'].includes(item.url))).toHaveLength(1);
     expect(selected.filter((item) => item.source === 'Source A')).toHaveLength(2);
     expect(selected).toHaveLength(4);
+  });
+
+  it('caps a media brand shared by multiple feeds', () => {
+    const selected = selectDiverseCandidates([
+      baseItem({
+        url: 'https://techcrunch.com/ai-one',
+        title: 'OpenAI launches a new coding agent',
+        source: 'TechCrunch AI',
+        sourceBrand: 'TechCrunch',
+      }),
+      baseItem({
+        url: 'https://techcrunch.com/security-two',
+        title: 'Cloud security startup patches API vulnerability',
+        source: 'TechCrunch Security',
+        sourceBrand: 'TechCrunch',
+      }),
+      baseItem({
+        url: 'https://techcrunch.com/gadgets-three',
+        title: 'Robotics company releases a new home device',
+        source: 'TechCrunch Gadgets',
+        sourceBrand: 'TechCrunch',
+      }),
+    ], { maxAgeHours: 36, maxPerSource: 2, limit: 10 });
+
+    expect(selected).toHaveLength(2);
   });
 
   it('reserves five gadget slots before filling the remaining digest', () => {
