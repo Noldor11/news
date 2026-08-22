@@ -113,6 +113,7 @@ function buildConfig() {
     hardMinArticlesPerDigest: parseInt(process.env.MIN_PUBLISHABLE_ARTICLES || '15', 10),
     maxArticlesPerDigest: parseInt(process.env.MAX_ARTICLES_PER_DIGEST || '25', 10),
     gadgetArticlesPerDigest: parseInt(process.env.GADGET_ARTICLES_PER_DIGEST || '5', 10),
+    appleArticlesPerDigest: parseInt(process.env.APPLE_ARTICLES_PER_DIGEST || '1', 10),
     marketplaceArticlesPerDigest: parseInt(process.env.MARKETPLACE_ARTICLES_PER_DIGEST || '1', 10),
     workMarketArticlesPerDigest: parseInt(process.env.WORK_MARKET_ARTICLES_PER_DIGEST || '7', 10),
     workMarketMaxArticleAgeHours: parseInt(process.env.WORK_MARKET_MAX_ARTICLE_AGE_HOURS || '36', 10),

@@ -4,11 +4,13 @@ import {
   extractArticleLead,
   extractMetaDescription,
   isGadgetItem,
+  isAppleEcosystemItem,
   isFreshTechItem,
   parseFeed,
   parseLinkedInPressroom,
   resolveRssSettings,
   scoreItem,
+  scoreAppleImportance,
   selectDigestCandidatesDetailed,
   selectCandidatesWithFallback,
   selectDiverseCandidates,
@@ -185,6 +187,7 @@ describe('RSS selection quality gates', () => {
       hardMinArticles: 15,
       maxArticles: 25,
       gadgetArticlesPerDigest: 5,
+      appleArticlesPerDigest: 1,
       marketplaceArticlesPerDigest: 1,
       workMarketArticlesPerDigest: 7,
       workMarketMaxAgeHours: 36,
@@ -197,6 +200,89 @@ describe('RSS selection quality gates', () => {
       maxPerSource: 2,
       recoveryMode: true,
     });
+  });
+
+  it('keeps only the highest-impact Apple story instead of banning Apple entirely', () => {
+    const appleItems = [
+      baseItem({
+        title: "Apple's camera-equipped AirPods: all the new rumors",
+        summary: 'A collection of rumors about a possible future Apple accessory and speculative camera features.',
+        source: 'MacRumors',
+        sourceBrand: 'MacRumors',
+        category: 'gadgets',
+        url: 'https://example.com/apple-rumors',
+      }),
+      baseItem({
+        title: "10 ways to improve your iPhone's battery life",
+        summary: 'Tips and settings that may extend battery life on an existing Apple phone.',
+        source: 'MacRumors',
+        sourceBrand: 'MacRumors',
+        category: 'gadgets',
+        url: 'https://example.com/iphone-tips',
+      }),
+      baseItem({
+        title: 'Apple releases emergency iOS security patch for an exploited zero-day',
+        summary: 'Apple released a major security patch for an actively exploited iPhone vulnerability.',
+        source: 'SecurityWeek',
+        sourceBrand: 'SecurityWeek',
+        category: 'gadgets',
+        url: 'https://example.com/apple-security',
+      }),
+    ];
+    const nonAppleItems = Array.from({ length: 4 }, (_, index) => baseItem({
+      title: `Android device launch ${index}`,
+      summary: 'A manufacturer launched a new Android smartphone with updated hardware and security features.',
+      source: `Gadget Source ${index}`,
+      sourceBrand: `Gadget Source ${index}`,
+      category: 'gadgets',
+      url: `https://example.com/android-${index}`,
+    }));
+    const result = selectDigestCandidatesDetailed([...appleItems, ...nonAppleItems], {
+      limit: 5,
+      maxPerSource: 2,
+      gadgetArticlesPerDigest: 5,
+      appleArticlesPerDigest: 1,
+      marketplaceArticlesPerDigest: 0,
+      workMarketArticlesPerDigest: 0,
+    });
+    const selectedApple = result.selected.filter(isAppleEcosystemItem);
+
+    expect(selectedApple).toHaveLength(1);
+    expect(selectedApple[0].url).toBe('https://example.com/apple-security');
+    expect(scoreAppleImportance(appleItems[2])).toBeGreaterThan(scoreAppleImportance(appleItems[0]));
+    expect(scoreItem(appleItems[2]).score).toBeGreaterThan(scoreItem(appleItems[1]).score);
+  });
+
+  it('allows zero Apple stories when the available items are only rumors and tips', () => {
+    const lowSignalApple = [
+      baseItem({
+        title: 'Apple leaks and AirPods rumors round-up',
+        summary: 'Rumors and leaks speculate about possible future accessories without an official announcement.',
+        category: 'gadgets',
+        url: 'https://example.com/apple-leaks',
+      }),
+      baseItem({
+        title: 'How to improve iPhone battery life',
+        summary: 'Tips for changing settings on an existing phone to improve battery life.',
+        category: 'gadgets',
+        url: 'https://example.com/iphone-battery-tips',
+      }),
+    ];
+    const nonApple = Array.from({ length: 3 }, (_, index) => baseItem({
+      title: `Android hardware release ${index}`,
+      summary: 'A manufacturer released a new Android device with upgraded hardware and security features.',
+      category: 'gadgets',
+      url: `https://example.com/non-apple-${index}`,
+    }));
+    const result = selectDigestCandidatesDetailed([...lowSignalApple, ...nonApple], {
+      limit: 3,
+      gadgetArticlesPerDigest: 3,
+      appleArticlesPerDigest: 1,
+      marketplaceArticlesPerDigest: 0,
+      workMarketArticlesPerDigest: 0,
+    });
+
+    expect(result.selected.filter(isAppleEcosystemItem)).toHaveLength(0);
   });
 
   it('publishes 8-22 items as degraded instead of dropping the whole day', () => {

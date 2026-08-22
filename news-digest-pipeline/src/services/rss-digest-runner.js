@@ -17,6 +17,7 @@ const DEFAULT_MIN_ARTICLES = 23;
 const DEFAULT_HARD_MIN_ARTICLES = 15;
 const DEFAULT_MAX_ARTICLES = 25;
 const DEFAULT_GADGET_ARTICLES = 5;
+const DEFAULT_APPLE_ARTICLES = 1;
 const DEFAULT_MARKETPLACE_ARTICLES = 1;
 const DEFAULT_WORK_MARKET_ARTICLES = 7;
 const DEFAULT_WORK_MARKET_MAX_AGE_HOURS = 36;
@@ -191,6 +192,22 @@ const gadgetTerms = [
   'consumer electronics',
 ];
 
+const appleEcosystemTerms = [
+  'apple', 'iphone', 'ipad', 'imac', 'macbook', 'mac mini', 'mac pro', 'macos', 'airpods',
+  'homepod', 'watchos', 'vision pro', 'visionos', 'apple intelligence',
+];
+
+const appleHighImpactTerms = [
+  'announce', 'announced', 'introduce', 'introduced', 'launch', 'launched', 'release', 'released',
+  'major update', 'security', 'vulnerability', 'zero-day', 'exploit', 'patch', 'recall', 'acquire',
+  'acquisition', 'antitrust', 'regulator', 'new chip', 'm-series', 'apple intelligence',
+];
+
+const appleLowSignalTerms = [
+  'rumor', 'rumour', 'leak', 'leaks', 'tips', 'ways to', 'how to', 'deal', 'discount', 'sale', 'review', 'first look',
+  'accessory', 'case', 'cover', 'battery life', 'best apps', 'wallpaper',
+];
+
 const marketplaceTerms = [
   'upwork', 'fiverr', 'linkedin', 'freelance', 'freelancer', 'freelancing', 'talent marketplace',
   'talent', 'client', 'contractor', 'gig', 'gigs', 'hiring', 'job search', 'professional network',
@@ -313,6 +330,12 @@ export function resolveRssSettings(appConfig = config, { recoveryMode = false } 
       0,
       maxArticles,
     ),
+    appleArticlesPerDigest: clampInteger(
+      appConfig.appleArticlesPerDigest,
+      DEFAULT_APPLE_ARTICLES,
+      0,
+      maxArticles,
+    ),
     marketplaceArticlesPerDigest: clampInteger(
       appConfig.marketplaceArticlesPerDigest,
       DEFAULT_MARKETPLACE_ARTICLES,
@@ -346,6 +369,7 @@ export function selectCandidatesWithFallback(
     maxPerSource: settings.maxPerSource,
     limit: FETCH_CANDIDATES,
     gadgetArticlesPerDigest: settings.gadgetArticlesPerDigest,
+    appleArticlesPerDigest: settings.appleArticlesPerDigest,
     marketplaceArticlesPerDigest: settings.marketplaceArticlesPerDigest,
     workMarketArticlesPerDigest: settings.workMarketArticlesPerDigest,
     workMarketMaxAgeHours: settings.workMarketMaxAgeHours,
@@ -629,18 +653,33 @@ export function scoreItem(item, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
     : 0;
   const techScore = baseTechScore + gadgetScore + marketplaceScore;
   const nonTechScore = nonTechTerms.reduce((sum, term) => sum + (containsTerm(text, term) ? 4 : 0), 0);
+  const appleImportanceScore = scoreAppleImportance(item);
   const timestamp = Date.parse(item.publishedAt);
   const ageHours = Number.isNaN(timestamp) ? maxAgeHours + 1 : Math.max(0, (Date.now() - timestamp) / 3600000);
   const recencyScore = Math.max(0, maxAgeHours - ageHours) / 6;
   return {
-    score: techScore + recencyScore - nonTechScore,
+    score: techScore + recencyScore - nonTechScore + appleImportanceScore,
     ageHours,
     techScore,
     gadgetScore,
     marketplaceScore,
     nonTechScore,
+    appleImportanceScore,
     category,
   };
+}
+
+export function isAppleEcosystemItem(item) {
+  const text = [item?.title, item?.summary].filter(Boolean).join(' ').toLowerCase();
+  return appleEcosystemTerms.some((term) => containsTerm(text, term));
+}
+
+export function scoreAppleImportance(item) {
+  if (!isAppleEcosystemItem(item)) return 0;
+  const text = [item?.title, item?.summary].filter(Boolean).join(' ').toLowerCase();
+  const highImpact = appleHighImpactTerms.filter((term) => containsTerm(text, term)).length;
+  const lowSignal = appleLowSignalTerms.filter((term) => containsTerm(text, term)).length;
+  return (highImpact * 4) - (lowSignal * 5) - (highImpact === 0 ? 2 : 0);
 }
 
 export function isFreshTechItem(meta, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
@@ -720,6 +759,12 @@ export function selectDiverseCandidatesDetailed(items, settings = {}) {
   const maxAgeHours = settings.maxAgeHours || DEFAULT_MAX_AGE_HOURS;
   const maxPerSource = settings.maxPerSource || DEFAULT_MAX_PER_SOURCE;
   const limit = settings.limit || FETCH_CANDIDATES;
+  const appleLimit = clampInteger(
+    settings.appleArticlesPerDigest,
+    DEFAULT_APPLE_ARTICLES,
+    0,
+    limit,
+  );
   const excludedUrls = settings.excludedUrls instanceof Set
     ? settings.excludedUrls
     : new Set(settings.excludedUrls || []);
@@ -731,6 +776,7 @@ export function selectDiverseCandidatesDetailed(items, settings = {}) {
     ? new Map(settings.initialSourceCounts)
     : new Map(Object.entries(settings.initialSourceCounts || {}));
   const sourceKey = (item) => item.sourceBrand || item.source;
+  let appleCount = clampInteger(settings.initialAppleCount, 0, 0, limit);
 
   const ranked = items
     .map((item) => ({ ...item, meta: item.meta || scoreItem(item, maxAgeHours) }))
@@ -739,6 +785,9 @@ export function selectDiverseCandidatesDetailed(items, settings = {}) {
 
   for (const item of ranked) {
     if (selected.length >= limit || seenUrls.has(item.url) || excludedUrls.has(item.url)) continue;
+    const appleItem = isAppleEcosystemItem(item);
+    if (appleItem && item.meta.appleImportanceScore <= 0) continue;
+    if (appleItem && appleCount >= appleLimit) continue;
     const brand = sourceKey(item);
     if ((sourceCounts.get(brand) || 0) >= maxPerSource) continue;
     const match = findEventDuplicate(item, [...priorArticles, ...selected]);
@@ -759,6 +808,7 @@ export function selectDiverseCandidatesDetailed(items, settings = {}) {
 
     seenUrls.add(item.url);
     sourceCounts.set(brand, (sourceCounts.get(brand) || 0) + 1);
+    if (appleItem) appleCount += 1;
     selected.push({ ...item, eventFingerprint: buildEventFingerprint(item) });
   }
 
@@ -783,6 +833,12 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
   const gadgetTarget = clampInteger(
     settings.gadgetArticlesPerDigest,
     DEFAULT_GADGET_ARTICLES,
+    0,
+    limit,
+  );
+  const appleLimit = clampInteger(
+    settings.appleArticlesPerDigest,
+    DEFAULT_APPLE_ARTICLES,
     0,
     limit,
   );
@@ -834,6 +890,7 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
   let remaining = limit;
   let priorArticles = [...(settings.priorArticles || [])];
   const sourceCounts = new Map();
+  let appleCount = 0;
   const sourceKey = (item) => item.sourceBrand || item.source;
   const baseExcludedUrls = settings.excludedUrls instanceof Set
     ? settings.excludedUrls
@@ -853,6 +910,8 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
       limit: laneLimit,
       priorArticles,
       initialSourceCounts: sourceCounts,
+      initialAppleCount: appleCount,
+      appleArticlesPerDigest: appleLimit,
       excludedUrls: new Set([
         ...baseExcludedUrls,
         ...selected.map((item) => item.url),
@@ -863,6 +922,7 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
     for (const item of laneResult.selected) {
       const brand = sourceKey(item);
       sourceCounts.set(brand, (sourceCounts.get(brand) || 0) + 1);
+      if (isAppleEcosystemItem(item)) appleCount += 1;
     }
     remaining -= laneResult.selected.length;
     priorArticles = [...priorArticles, ...laneResult.selected];
@@ -919,6 +979,8 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
       limit: remaining,
       priorArticles,
       initialSourceCounts: sourceCounts,
+      initialAppleCount: appleCount,
+      appleArticlesPerDigest: appleLimit,
       excludedUrls: new Set([
         ...baseExcludedUrls,
         ...selected.map((item) => item.url),
@@ -998,6 +1060,7 @@ async function selectCandidatesWithSemanticFallback(
       maxPerSource: settings.maxPerSource,
       limit: FETCH_CANDIDATES,
       gadgetArticlesPerDigest: settings.gadgetArticlesPerDigest,
+      appleArticlesPerDigest: settings.appleArticlesPerDigest,
       marketplaceArticlesPerDigest: settings.marketplaceArticlesPerDigest,
       workMarketArticlesPerDigest: settings.workMarketArticlesPerDigest,
       workMarketMaxAgeHours: settings.workMarketMaxAgeHours,
