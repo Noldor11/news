@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { publishToTelegram, splitMessage } from './telegram.js';
+import { formatTelegramHtml, publishToTelegram, splitMessage } from './telegram.js';
 
 const multiPartContent = `${'A'.repeat(3900)}\n\n2. ${'B'.repeat(500)}`;
 
 describe('Telegram publisher', () => {
+  it('hides canonical URL lines behind a safe Source link', () => {
+    const html = formatTelegramHtml([
+      '#новости  1. AI & automation < launch',
+      'https://example.com/story?a=1&b=2',
+      '',
+      '#ИИ #технологии',
+    ].join('\n'));
+
+    expect(html).toContain('AI &amp; automation &lt; launch');
+    expect(html).toContain('<a href="https://example.com/story?a=1&amp;b=2">источник</a>');
+    expect(html).not.toContain('\nhttps://example.com/story');
+  });
+
   it('confirms all chunks before reporting success', async () => {
     const chunks = splitMessage(multiPartContent);
     const sent = [];

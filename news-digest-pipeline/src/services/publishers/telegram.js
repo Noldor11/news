@@ -6,6 +6,7 @@
 
 const TG_MAX_LENGTH = 4096;
 const INTER_MESSAGE_DELAY = 1000;
+const SOURCE_LINK_LABEL = 'источник';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,6 +46,39 @@ export function splitMessage(text) {
   return chunks;
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Keep stored digest content as plain text while presenting canonical URL
+ * lines as compact links in Telegram. All model-generated text is escaped.
+ */
+export function formatTelegramHtml(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trim();
+      const url = /^https?:\/\/\S+$/i.test(trimmed) ? safeHttpUrl(trimmed) : '';
+      if (!url) return escapeHtml(line);
+      return `<a href="${escapeHtml(url)}">${SOURCE_LINK_LABEL}</a>`;
+    })
+    .join('\n');
+}
+
 async function sendOne(botToken, chatId, text) {
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
 
@@ -55,6 +89,7 @@ async function sendOne(botToken, chatId, text) {
       body: JSON.stringify({
         chat_id: chatId,
         text,
+        parse_mode: 'HTML',
         disable_web_page_preview: true,
       }),
     });
@@ -117,7 +152,7 @@ export async function publishToTelegram(botToken, chatId, content, options = {})
     };
   }
 
-  const chunks = splitMessage(content);
+  const chunks = splitMessage(content).map(formatTelegramHtml);
   const messageIds = [];
   console.log(`[telegram] Sending ${chunks.length} message(s) to ${chatId}`);
 

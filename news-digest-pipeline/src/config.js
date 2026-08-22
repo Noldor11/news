@@ -114,6 +114,8 @@ function buildConfig() {
     maxArticlesPerDigest: parseInt(process.env.MAX_ARTICLES_PER_DIGEST || '25', 10),
     gadgetArticlesPerDigest: parseInt(process.env.GADGET_ARTICLES_PER_DIGEST || '5', 10),
     marketplaceArticlesPerDigest: parseInt(process.env.MARKETPLACE_ARTICLES_PER_DIGEST || '1', 10),
+    workMarketArticlesPerDigest: parseInt(process.env.WORK_MARKET_ARTICLES_PER_DIGEST || '7', 10),
+    workMarketMaxArticleAgeHours: parseInt(process.env.WORK_MARKET_MAX_ARTICLE_AGE_HOURS || '36', 10),
     rssMaxArticleAgeHours: parseInt(process.env.RSS_MAX_ARTICLE_AGE_HOURS || '36', 10),
     rssFallbackMaxArticleAgeHours: parseInt(process.env.RSS_FALLBACK_MAX_ARTICLE_AGE_HOURS || '72', 10),
     rssMaxArticlesPerSource: parseInt(process.env.RSS_MAX_ARTICLES_PER_SOURCE || '3', 10),

@@ -18,6 +18,8 @@ const DEFAULT_HARD_MIN_ARTICLES = 15;
 const DEFAULT_MAX_ARTICLES = 25;
 const DEFAULT_GADGET_ARTICLES = 5;
 const DEFAULT_MARKETPLACE_ARTICLES = 1;
+const DEFAULT_WORK_MARKET_ARTICLES = 7;
+const DEFAULT_WORK_MARKET_MAX_AGE_HOURS = 36;
 const DEFAULT_MAX_AGE_HOURS = 36;
 const DEFAULT_FALLBACK_MAX_AGE_HOURS = 72;
 const DEFAULT_MAX_PER_SOURCE = 3;
@@ -27,6 +29,17 @@ const DEFAULT_FETCH_RETRIES = 2;
 const FETCH_CANDIDATES = 80;
 const FEED_TIMEOUT_MS = 15000;
 const DEFAULT_EVENT_HISTORY_DAYS = 30;
+
+const WORK_MARKET_CATEGORIES = new Set(['upwork', 'fiverr', 'linkedin', 'freelance-market']);
+const workMarketFeedTerms = [
+  'ai', 'automation', 'freelance', 'freelancer', 'gig economy', 'independent work', 'contractor',
+  'contingent workforce', 'future of work', 'remote work', 'hiring', 'jobs', 'job market', 'labor market',
+  'talent marketplace', 'skills demand', 'upwork', 'fiverr', 'linkedin', 'n8n', 'zapier', 'make.com',
+];
+const strictFreelanceFeedTerms = [
+  'freelance', 'freelancer', 'gig economy', 'independent work', 'contractor', 'contingent workforce',
+  'talent marketplace', 'creator economy', 'upwork', 'fiverr',
+];
 
 const sources = [
   { name: 'TechCrunch AI', url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },
@@ -42,6 +55,11 @@ const sources = [
   { name: 'AWS Machine Learning', url: 'https://aws.amazon.com/blogs/machine-learning/feed/' },
   { name: 'ZDNet AI', url: 'https://www.zdnet.com/topic/artificial-intelligence/rss.xml' },
   { name: 'IEEE Spectrum AI', url: 'https://spectrum.ieee.org/feeds/topic/artificial-intelligence.rss' },
+  { name: 'MIT Technology Review AI', url: 'https://www.technologyreview.com/topic/artificial-intelligence/feed/' },
+  { name: '404 Media', url: 'https://www.404media.co/rss/' },
+  { name: 'Google Research', url: 'https://research.google/blog/rss/' },
+  { name: 'Microsoft Research', url: 'https://www.microsoft.com/en-us/research/feed/' },
+  { name: 'Simon Willison', url: 'https://simonwillison.net/atom/everything/' },
   // Official engineering/research feeds widen the pool without introducing a
   // generic news search that could pull politics or low-quality reposts.
   { name: 'GitHub Blog', url: 'https://github.blog/feed/' },
@@ -55,6 +73,8 @@ const sources = [
   { name: 'TechCrunch Gadgets', category: 'gadgets', url: 'https://techcrunch.com/category/gadgets/feed/' },
   { name: 'Ars Technica Gear & Gadgets', category: 'gadgets', url: 'https://feeds.arstechnica.com/arstechnica/gadgets' },
   { name: 'The Verge Gadgets', category: 'gadgets', url: 'https://www.theverge.com/rss/gadgets/index.xml' },
+  { name: 'Engadget', category: 'gadgets', url: 'https://www.engadget.com/rss.xml' },
+  { name: 'Apple Newsroom', category: 'gadgets', url: 'https://www.apple.com/newsroom/rss-feed.rss' },
   {
     name: 'Google News Upwork Market',
     category: 'upwork',
@@ -67,7 +87,52 @@ const sources = [
     url: 'https://news.google.com/rss/search?q=%22Fiverr%22%20(freelance%20OR%20freelancer%20OR%20hiring%20OR%20jobs%20OR%20demand%20OR%20fees%20OR%20policy)%20-site%3Afiverr.com%20-site%3Ainvestors.fiverr.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
     blockedPublisherDomains: ['fiverr.com'],
   },
+  {
+    name: 'Google News LinkedIn Work Market',
+    category: 'linkedin',
+    url: 'https://news.google.com/rss/search?q=%22LinkedIn%22%20(hiring%20OR%20jobs%20OR%20freelance%20OR%20workforce%20OR%20AI%20OR%20automation)%20-site%3Alinkedin.com%20-site%3Anews.linkedin.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
+    blockedPublisherDomains: ['linkedin.com'],
+  },
   { name: 'LinkedIn Pressroom', category: 'linkedin', format: 'linkedin-pressroom', url: 'https://news.linkedin.com/' },
+  {
+    name: 'Google News Freelance Market',
+    category: 'freelance-market',
+    url: 'https://news.google.com/rss/search?q=(%22freelance%20market%22%20OR%20%22gig%20economy%22%20OR%20%22independent%20work%22%20OR%20%22contingent%20workforce%22)%20(AI%20OR%20automation%20OR%20hiring%20OR%20demand%20OR%20rates%20OR%20jobs)%20when%3A2d&hl=en-US&gl=US&ceid=US%3Aen',
+    requiredAnyTerms: workMarketFeedTerms,
+  },
+  {
+    name: 'Google News AI Automation Work',
+    category: 'freelance-market',
+    url: 'https://news.google.com/rss/search?q=(%22AI%20automation%22%20OR%20%22AI%20agents%22%20OR%20n8n%20OR%20Zapier%20OR%20%22Make.com%22)%20(freelance%20OR%20jobs%20OR%20hiring%20OR%20demand%20OR%20skills)%20when%3A2d&hl=en-US&gl=US&ceid=US%3Aen',
+    requiredAnyTerms: workMarketFeedTerms,
+  },
+  {
+    name: 'Indeed Hiring Lab',
+    category: 'freelance-market',
+    url: 'https://www.hiringlab.org/feed/',
+    requiredAnyTerms: workMarketFeedTerms,
+  },
+  {
+    name: 'Allwork Space Workforce',
+    category: 'freelance-market',
+    url: 'https://allwork.space/category/workforce/feed/',
+    requiredAnyTerms: workMarketFeedTerms,
+  },
+  {
+    name: 'Allwork Space Tech',
+    category: 'freelance-market',
+    url: 'https://allwork.space/category/tech/feed/',
+    requiredAnyTerms: workMarketFeedTerms,
+  },
+  { name: 'Freelancers Union', category: 'freelance-market', url: 'https://blog.freelancersunion.org/rss/' },
+  { name: 'Freelance Informer AI', category: 'freelance-market', url: 'https://www.freelanceinformer.com/category/artificial-intelligence/feed/' },
+  {
+    name: 'PYMNTS Freelance Market',
+    category: 'freelance-market',
+    url: 'https://www.pymnts.com/feed/',
+    requiredAnyTerms: strictFreelanceFeedTerms,
+  },
+  { name: 'Freelancing.eu', category: 'freelance-market', url: 'https://freelancingeu.substack.com/feed' },
 ];
 
 const techTerms = [
@@ -211,6 +276,18 @@ export function resolveRssSettings(appConfig = config, { recoveryMode = false } 
       0,
       maxArticles,
     ),
+    workMarketArticlesPerDigest: clampInteger(
+      appConfig.workMarketArticlesPerDigest,
+      DEFAULT_WORK_MARKET_ARTICLES,
+      0,
+      maxArticles,
+    ),
+    workMarketMaxAgeHours: clampInteger(
+      appConfig.workMarketMaxArticleAgeHours,
+      DEFAULT_WORK_MARKET_MAX_AGE_HOURS,
+      1,
+      maxAgeHours,
+    ),
     fetchRetries: clampInteger(appConfig.rssFetchRetries, DEFAULT_FETCH_RETRIES, 0, 5),
   };
 }
@@ -227,6 +304,8 @@ export function selectCandidatesWithFallback(
     limit: FETCH_CANDIDATES,
     gadgetArticlesPerDigest: settings.gadgetArticlesPerDigest,
     marketplaceArticlesPerDigest: settings.marketplaceArticlesPerDigest,
+    workMarketArticlesPerDigest: settings.workMarketArticlesPerDigest,
+    workMarketMaxAgeHours: settings.workMarketMaxAgeHours,
     excludedUrls,
     priorArticles,
   });
@@ -335,6 +414,24 @@ export function isBlockedPublisher(source, publisherUrl) {
   }
 }
 
+function containsTerm(text, term) {
+  const normalizedTerm = String(term || '').trim().toLowerCase();
+  if (!normalizedTerm) return false;
+  if (normalizedTerm.length > 3) return text.includes(normalizedTerm);
+
+  const escaped = normalizedTerm
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\s+/g, '\\s+');
+  return new RegExp(`(^|[^a-z0-9])${escaped}(?=$|[^a-z0-9])`, 'i').test(text);
+}
+
+function matchesRequiredSourceTerms(item, source) {
+  const requiredTerms = Array.isArray(source?.requiredAnyTerms) ? source.requiredAnyTerms : [];
+  if (requiredTerms.length === 0) return true;
+  const text = `${item.title || ''} ${item.summary || ''}`.toLowerCase();
+  return requiredTerms.some((term) => containsTerm(text, term));
+}
+
 export function parseFeed(xml, source) {
   const sourceName = typeof source === 'string' ? source : source.name;
   const category = typeof source === 'string' ? 'ai-tech' : (source.category || 'ai-tech');
@@ -359,7 +456,8 @@ export function parseFeed(xml, source) {
   }).filter((item) => item.title
     && item.url
     && item.summary.length >= 80
-    && !isBlockedPublisher(source, item.publisherUrl));
+    && !isBlockedPublisher(source, item.publisherUrl)
+    && matchesRequiredSourceTerms(item, source));
 }
 
 function readClassTag(block, tagName, className) {
@@ -401,15 +499,15 @@ export function parseLinkedInPressroom(html, source = { name: 'LinkedIn Pressroo
 export function scoreItem(item, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
   const text = [item.title, item.summary, item.source].join(' ').toLowerCase();
   const category = item.category || item.feedCategory || 'ai-tech';
-  const baseTechScore = techTerms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0);
+  const baseTechScore = techTerms.reduce((sum, term) => sum + (containsTerm(text, term) ? 3 : 0), 0);
   const gadgetScore = category === 'gadgets'
-    ? gadgetTerms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0)
+    ? gadgetTerms.reduce((sum, term) => sum + (containsTerm(text, term) ? 3 : 0), 0)
     : 0;
-  const marketplaceScore = ['upwork', 'fiverr', 'linkedin'].includes(category)
-    ? marketplaceTerms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0)
+  const marketplaceScore = WORK_MARKET_CATEGORIES.has(category)
+    ? marketplaceTerms.reduce((sum, term) => sum + (containsTerm(text, term) ? 3 : 0), 0)
     : 0;
   const techScore = baseTechScore + gadgetScore + marketplaceScore;
-  const nonTechScore = nonTechTerms.reduce((sum, term) => sum + (text.includes(term) ? 4 : 0), 0);
+  const nonTechScore = nonTechTerms.reduce((sum, term) => sum + (containsTerm(text, term) ? 4 : 0), 0);
   const timestamp = Date.parse(item.publishedAt);
   const ageHours = Number.isNaN(timestamp) ? maxAgeHours + 1 : Math.max(0, (Date.now() - timestamp) / 3600000);
   const recencyScore = Math.max(0, maxAgeHours - ageHours) / 6;
@@ -426,6 +524,7 @@ export function scoreItem(item, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
 
 export function isFreshTechItem(meta, maxAgeHours = DEFAULT_MAX_AGE_HOURS) {
   if (meta.ageHours > maxAgeHours || meta.techScore < 3) return false;
+  if (WORK_MARKET_CATEGORIES.has(meta.category) && meta.marketplaceScore < 3) return false;
   // A primarily political/news item is rejected even when it mentions AI once.
   return !(meta.nonTechScore >= 4 && meta.techScore < 9);
 }
@@ -507,7 +606,9 @@ export function selectDiverseCandidatesDetailed(items, settings = {}) {
   const selected = [];
   const rejectedDuplicates = [];
   const priorArticles = Array.isArray(settings.priorArticles) ? settings.priorArticles : [];
-  const sourceCounts = new Map();
+  const sourceCounts = settings.initialSourceCounts instanceof Map
+    ? new Map(settings.initialSourceCounts)
+    : new Map(Object.entries(settings.initialSourceCounts || {}));
 
   const ranked = items
     .map((item) => ({ ...item, meta: item.meta || scoreItem(item, maxAgeHours) }))
@@ -556,57 +657,134 @@ export function isGadgetItem(item) {
 export function selectDigestCandidatesDetailed(items, settings = {}) {
   const limit = settings.limit || FETCH_CANDIDATES;
   const maxAgeHours = settings.maxAgeHours || DEFAULT_MAX_AGE_HOURS;
+  const gadgetTarget = clampInteger(
+    settings.gadgetArticlesPerDigest,
+    DEFAULT_GADGET_ARTICLES,
+    0,
+    limit,
+  );
+  const workMarketTarget = clampInteger(
+    settings.workMarketArticlesPerDigest,
+    DEFAULT_WORK_MARKET_ARTICLES,
+    0,
+    limit,
+  );
+  const workMarketMaxAgeHours = Math.min(
+    maxAgeHours,
+    clampInteger(
+      settings.workMarketMaxAgeHours,
+      DEFAULT_WORK_MARKET_MAX_AGE_HOURS,
+      1,
+      maxAgeHours,
+    ),
+  );
+  const platformMinimumTarget = clampInteger(
+    settings.marketplaceArticlesPerDigest,
+    DEFAULT_MARKETPLACE_ARTICLES,
+    0,
+    workMarketTarget || limit,
+  );
   const laneTargets = [
     {
       category: 'gadgets',
-      target: clampInteger(settings.gadgetArticlesPerDigest, DEFAULT_GADGET_ARTICLES, 0, limit),
+      target: gadgetTarget,
+      maxAgeHours,
     },
-    ...['upwork', 'fiverr', 'linkedin'].map((category) => ({
+    ...(workMarketTarget > 0 ? ['upwork', 'fiverr', 'linkedin'].map((category) => ({
       category,
-      target: clampInteger(
-        settings.marketplaceArticlesPerDigest,
-        DEFAULT_MARKETPLACE_ARTICLES,
-        0,
-        limit,
-      ),
-    })),
+      target: platformMinimumTarget,
+      maxAgeHours: workMarketMaxAgeHours,
+    })) : []),
   ].filter((lane) => lane.target > 0);
 
-  if (laneTargets.length === 0) {
+  if (laneTargets.length === 0 && workMarketTarget === 0) {
     return { ...selectDiverseCandidatesDetailed(items, settings), laneStats: [] };
   }
 
   const selected = [];
   const rejectedDuplicates = [];
   const activeLaneCategories = new Set(laneTargets.map((lane) => lane.category));
+  if (workMarketTarget > 0) {
+    for (const category of WORK_MARKET_CATEGORIES) activeLaneCategories.add(category);
+  }
   const laneStats = [];
   let remaining = limit;
   let priorArticles = [...(settings.priorArticles || [])];
+  const sourceCounts = new Map();
+  const baseExcludedUrls = settings.excludedUrls instanceof Set
+    ? settings.excludedUrls
+    : new Set(settings.excludedUrls || []);
 
-  for (const lane of laneTargets) {
-    if (remaining <= 0) break;
-    const laneItems = items.filter((item) => (item.category || item.feedCategory || 'ai-tech') === lane.category);
+  const selectLane = (laneItems, target, laneMaxAgeHours) => {
+    const laneLimit = Math.min(target, remaining);
     const freshCount = laneItems
-      .map((item) => ({ ...item, meta: item.meta || scoreItem(item, maxAgeHours) }))
-      .filter((item) => isFreshTechItem(item.meta, maxAgeHours))
+      .map((item) => ({ ...item, meta: item.meta || scoreItem(item, laneMaxAgeHours) }))
+      .filter((item) => isFreshTechItem(item.meta, laneMaxAgeHours))
       .length;
+    if (laneLimit <= 0) return { selected: [], rejectedDuplicates: [], freshCount };
+
     const laneResult = selectDiverseCandidatesDetailed(laneItems, {
       ...settings,
-      limit: Math.min(lane.target, remaining),
+      maxAgeHours: laneMaxAgeHours,
+      limit: laneLimit,
       priorArticles,
+      initialSourceCounts: sourceCounts,
+      excludedUrls: new Set([
+        ...baseExcludedUrls,
+        ...selected.map((item) => item.url),
+      ]),
     });
     selected.push(...laneResult.selected);
     rejectedDuplicates.push(...laneResult.rejectedDuplicates);
+    for (const item of laneResult.selected) {
+      sourceCounts.set(item.source, (sourceCounts.get(item.source) || 0) + 1);
+    }
+    remaining -= laneResult.selected.length;
+    priorArticles = [...priorArticles, ...laneResult.selected];
+    return { ...laneResult, freshCount };
+  };
+
+  for (const lane of laneTargets) {
+    if (remaining <= 0) break;
+    const alreadySelectedForMarket = selected.filter((item) => WORK_MARKET_CATEGORIES.has(
+      item.category || item.feedCategory || 'ai-tech',
+    )).length;
+    const target = WORK_MARKET_CATEGORIES.has(lane.category)
+      ? Math.min(lane.target, Math.max(0, workMarketTarget - alreadySelectedForMarket))
+      : lane.target;
+    const laneItems = items.filter((item) => (item.category || item.feedCategory || 'ai-tech') === lane.category);
+    const laneResult = selectLane(laneItems, target, lane.maxAgeHours);
     laneStats.push({
       category: lane.category,
       target: lane.target,
       fetched: laneItems.length,
-      fresh: freshCount,
+      fresh: laneResult.freshCount,
       selected: laneResult.selected.length,
       duplicates: laneResult.rejectedDuplicates.length,
     });
-    remaining -= laneResult.selected.length;
-    priorArticles = [...priorArticles, ...laneResult.selected];
+  }
+
+  if (workMarketTarget > 0) {
+    const workMarketItems = items.filter((item) => WORK_MARKET_CATEGORIES.has(
+      item.category || item.feedCategory || 'ai-tech',
+    ));
+    const selectedBeforeFill = selected.filter((item) => WORK_MARKET_CATEGORIES.has(
+      item.category || item.feedCategory || 'ai-tech',
+    )).length;
+    const fillResult = selectLane(
+      workMarketItems,
+      Math.max(0, workMarketTarget - selectedBeforeFill),
+      workMarketMaxAgeHours,
+    );
+    laneStats.push({
+      category: 'work-market',
+      categories: [...WORK_MARKET_CATEGORIES],
+      target: workMarketTarget,
+      fetched: workMarketItems.length,
+      fresh: fillResult.freshCount,
+      selected: selectedBeforeFill + fillResult.selected.length,
+      duplicates: fillResult.rejectedDuplicates.length,
+    });
   }
 
   const coreItems = items.filter((item) => !activeLaneCategories.has(item.category || item.feedCategory || 'ai-tech'));
@@ -615,6 +793,11 @@ export function selectDigestCandidatesDetailed(items, settings = {}) {
       ...settings,
       limit: remaining,
       priorArticles,
+      initialSourceCounts: sourceCounts,
+      excludedUrls: new Set([
+        ...baseExcludedUrls,
+        ...selected.map((item) => item.url),
+      ]),
     })
     : { selected: [], rejectedDuplicates: [] };
 
@@ -659,12 +842,15 @@ async function fetchFeed(source, retries) {
 }
 
 function semanticLaneStats(laneStats, selected, rejected) {
-  return laneStats.map((lane) => ({
-    ...lane,
-    selected: selected.filter((item) => (item.category || item.feedCategory) === lane.category).length,
-    duplicates: (lane.duplicates || 0)
-      + rejected.filter((item) => (item.category || item.feedCategory) === lane.category).length,
-  }));
+  return laneStats.map((lane) => {
+    const categories = Array.isArray(lane.categories) ? lane.categories : [lane.category];
+    const belongsToLane = (item) => categories.includes(item.category || item.feedCategory);
+    return {
+      ...lane,
+      selected: selected.filter(belongsToLane).length,
+      duplicates: (lane.duplicates || 0) + rejected.filter(belongsToLane).length,
+    };
+  });
 }
 
 function addUsage(left = {}, right = {}) {
@@ -687,6 +873,8 @@ async function selectCandidatesWithSemanticFallback(
       limit: FETCH_CANDIDATES,
       gadgetArticlesPerDigest: settings.gadgetArticlesPerDigest,
       marketplaceArticlesPerDigest: settings.marketplaceArticlesPerDigest,
+      workMarketArticlesPerDigest: settings.workMarketArticlesPerDigest,
+      workMarketMaxAgeHours: settings.workMarketMaxAgeHours,
       excludedUrls,
       // Cross-day history needs an update-aware verdict. Obvious same-batch
       // duplicates are removed here; ambiguous pairs receive the same semantic

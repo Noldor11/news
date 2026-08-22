@@ -56,6 +56,32 @@ describe('RSS selection quality gates', () => {
     });
   });
 
+  it('filters broad feeds with whole-word work-market terms', () => {
+    const xml = `
+      <rss><channel>
+        <item>
+          <title>Retail chain said sales improved</title>
+          <link>https://example.com/retail</link>
+          <description>This unrelated retail report contains enough ordinary words to satisfy the minimum summary length.</description>
+          <pubDate>${freshDate}</pubDate>
+        </item>
+        <item>
+          <title>AI hiring demand rises for freelance automation specialists</title>
+          <link>https://example.com/freelance-ai</link>
+          <description>This labor market report measures freelance hiring, automation demand, skills, and contractor rates.</description>
+          <pubDate>${freshDate}</pubDate>
+        </item>
+      </channel></rss>`;
+
+    const items = parseFeed(xml, {
+      name: 'Broad Work Feed',
+      category: 'freelance-market',
+      requiredAnyTerms: ['ai', 'freelance'],
+    });
+
+    expect(items.map((item) => item.url)).toEqual(['https://example.com/freelance-ai']);
+  });
+
   it('uses the 23-25 article policy with five gadget and one platform slot by default', () => {
     expect(resolveRssSettings({})).toMatchObject({
       minArticles: 23,
@@ -63,6 +89,8 @@ describe('RSS selection quality gates', () => {
       maxArticles: 25,
       gadgetArticlesPerDigest: 5,
       marketplaceArticlesPerDigest: 1,
+      workMarketArticlesPerDigest: 7,
+      workMarketMaxAgeHours: 36,
       maxAgeHours: 36,
       fallbackMaxAgeHours: 72,
       maxPerSource: 3,
@@ -244,6 +272,92 @@ describe('RSS selection quality gates', () => {
       expect.objectContaining({ category: 'fiverr', target: 1, fetched: 1, fresh: 1, selected: 1 }),
       expect.objectContaining({ category: 'linkedin', target: 1, fetched: 1, fresh: 1, selected: 1 }),
     ]));
+  });
+
+  it('reserves up to seven fresh work-market items before filling AI news', () => {
+    const platformItems = [
+      ['upwork', 'Upwork reports new demand for AI automation freelancers', 'Client surveys show higher budgets for workflow specialists using n8n and APIs.'],
+      ['fiverr', 'Fiverr sees more AI agent automation gigs', 'Seller data shows a rise in packaged chatbot and business process services.'],
+      ['linkedin', 'LinkedIn publishes new data about AI hiring', 'Professional network data identifies changing skills and recruiting patterns.'],
+      ['freelance-market', 'Independent workers adopt automation tools', 'A contractor study measures time savings from software used for invoicing and delivery.'],
+      ['freelance-market', 'Consulting rates rise for machine learning skills', 'A labor report compares specialist rates across several technical disciplines.'],
+      ['freelance-market', 'Remote teams change how they hire contractors', 'Companies are revising project scopes, interviews, and distributed work policies.'],
+      ['freelance-market', 'Talent marketplaces test agent-assisted matching', 'New platform experiments connect client briefs with verified professional expertise.'],
+      ['freelance-market', 'Creators adopt a new proposal workflow', 'Independent professionals are testing a platform for contracts, payments, and approvals.'],
+    ].map(([category, title, detail], index) => baseItem({
+      category,
+      source: `Work Source ${index}`,
+      title,
+      summary: `${detail} The fresh freelance market coverage includes workforce implications for clients and professionals.`,
+      url: `https://work.example/${index}`,
+    }));
+    const core = [
+      ['OpenAI launches a coding model', 'The release adds repository tools and API controls for software teams.'],
+      ['NVIDIA unveils a data center GPU', 'The chip targets machine learning training with a redesigned memory system.'],
+      ['Google demonstrates a warehouse robot', 'The robotics research combines vision sensors with physical control policies.'],
+      ['Cloudflare blocks a new security attack', 'The network service adds privacy protections and automated threat detection.'],
+      ['Microsoft releases a quantum compiler', 'The developer tool improves circuit optimization for experimental hardware.'],
+      ['Mozilla updates browser data controls', 'The software release gives users more control over tracking and local storage.'],
+    ].map(([title, summary], index) => baseItem({
+      source: `Core Source ${index}`,
+      title,
+      summary,
+      url: `https://ai.example/work-quota-${index}`,
+    }));
+
+    const result = selectDigestCandidatesDetailed([...core, ...platformItems], {
+      maxAgeHours: 72,
+      workMarketMaxAgeHours: 36,
+      maxPerSource: 3,
+      limit: 10,
+      gadgetArticlesPerDigest: 0,
+      marketplaceArticlesPerDigest: 1,
+      workMarketArticlesPerDigest: 7,
+    });
+
+    const marketSelected = result.selected.filter((item) => (
+      ['upwork', 'fiverr', 'linkedin', 'freelance-market'].includes(item.category)
+    ));
+    expect(result.selected).toHaveLength(10);
+    expect(marketSelected).toHaveLength(7);
+    expect(result.laneStats).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: 'work-market', target: 7, selected: 7 }),
+    ]));
+  });
+
+  it('does not use stale work-market items to fill the seven-item target', () => {
+    const result = selectDigestCandidatesDetailed([
+      baseItem({
+        category: 'freelance-market',
+        source: 'Fresh Work Source',
+        title: 'Freelance AI automation demand rises',
+        summary: 'Fresh freelance hiring and AI automation demand data for independent contractors and clients.',
+        url: 'https://work.example/fresh',
+      }),
+      baseItem({
+        category: 'freelance-market',
+        source: 'Old Work Source',
+        title: 'Old freelancer platform survey',
+        summary: 'An old freelance workforce and hiring survey about contractors, automation, and marketplace demand.',
+        publishedAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toUTCString(),
+        url: 'https://work.example/stale',
+      }),
+      baseItem({
+        title: 'Anthropic publishes a fresh model evaluation',
+        url: 'https://ai.example/fresh-core',
+      }),
+    ], {
+      maxAgeHours: 72,
+      workMarketMaxAgeHours: 36,
+      maxPerSource: 3,
+      limit: 10,
+      gadgetArticlesPerDigest: 0,
+      marketplaceArticlesPerDigest: 1,
+      workMarketArticlesPerDigest: 7,
+    });
+
+    expect(result.selected.map((item) => item.url)).toContain('https://work.example/fresh');
+    expect(result.selected.map((item) => item.url)).not.toContain('https://work.example/stale');
   });
 
   it('reports missing marketplace lanes instead of inventing platform news', () => {
