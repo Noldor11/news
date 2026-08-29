@@ -1,5 +1,7 @@
 const URL_PATTERN = /https?:\/\/[^\s<>"')\]]+/gi;
 const ITEM_PATTERN = /^(?:#новости\s+)?(\d+)\.\s+/gim;
+const ACTIONS_HEADING_PATTERN = /^Три действия из сегодняшних новостей:\s*$/im;
+const ARTICLE_MARKER_PATTERN = /^(?:#новости\s+)?\d+\.\s+/im;
 
 function cleanText(value, fallback) {
   const withoutUrls = String(value || '')
@@ -10,13 +12,29 @@ function cleanText(value, fallback) {
   return withoutUrls || String(fallback || '').trim();
 }
 
-function renderFallback(articles, hashtagsSuffix) {
+function extractActionsBlock(value) {
+  const draft = String(value || '').trim();
+  const heading = ACTIONS_HEADING_PATTERN.exec(draft);
+  if (!heading) return { body: draft, actions: '' };
+
+  const tail = draft.slice(heading.index);
+  if (ARTICLE_MARKER_PATTERN.test(tail)) {
+    return { body: draft, actions: '' };
+  }
+
+  return {
+    body: draft.slice(0, heading.index).trim(),
+    actions: cleanText(tail, ''),
+  };
+}
+
+function renderFallback(articles, hashtagsSuffix, actionsBlock = '') {
   const items = articles.map((article, index) => {
     const text = cleanText(article.commentary, article.title || 'No commentary available.');
     const prefix = index === 0 ? '#новости  1.' : `${index + 1}.`;
     return `${prefix} ${text}\n${article.url}`;
   });
-  return `${items.join('\n\n')}${hashtagsSuffix ? `\n\n${hashtagsSuffix}` : ''}`.trim();
+  return [items.join('\n\n'), actionsBlock, hashtagsSuffix].filter(Boolean).join('\n\n').trim();
 }
 
 /**
@@ -32,11 +50,14 @@ export function enforceCanonicalDigestLinks(content, articles, hashtagsSuffix = 
     draft = draft.slice(0, -suffix.length).trim();
   }
 
+  const { body, actions } = extractActionsBlock(draft);
+  draft = body;
+
   const markers = [...draft.matchAll(ITEM_PATTERN)];
   const isExpectedOrder = markers.length === articles.length
     && markers.every((match, index) => Number(match[1]) === index + 1);
 
-  if (!isExpectedOrder) return renderFallback(articles, suffix);
+  if (!isExpectedOrder) return renderFallback(articles, suffix, actions);
 
   const rendered = articles.map((article, index) => {
     const start = markers[index].index + markers[index][0].length;
@@ -46,5 +67,5 @@ export function enforceCanonicalDigestLinks(content, articles, hashtagsSuffix = 
     return `${prefix} ${text}\n${article.url}`;
   });
 
-  return `${rendered.join('\n\n')}${suffix ? `\n\n${suffix}` : ''}`.trim();
+  return [rendered.join('\n\n'), actions, suffix].filter(Boolean).join('\n\n').trim();
 }

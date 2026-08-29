@@ -17,6 +17,21 @@ describe('Telegram publisher', () => {
     expect(html).not.toContain('\nhttps://example.com/story');
   });
 
+  it('keeps the final actions block when a long digest is split into chunks', () => {
+    const actions = [
+      'Три действия из сегодняшних новостей:',
+      '1) Сохранить рабочие шаблоны.',
+      '2) Проверить настройки приватности.',
+      '3) Сравнить независимые тесты.',
+    ].join('\n');
+    const content = `${multiPartContent}\n\n${actions}`;
+    const chunks = splitMessage(content);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.at(-1)).toContain(actions);
+    expect(chunks.join('\n\n')).toContain(actions);
+  });
+
   it('confirms all chunks before reporting success', async () => {
     const chunks = splitMessage(multiPartContent);
     const sent = [];
