@@ -42,8 +42,12 @@ async function main() {
   validateAsyncWorkflow(copy);
   if (mode === '--cutover') {
     if (original.versionId !== record.sourceVersionId) throw new Error('Original changed since preparation');
-    const header = original.nodes.find((n) => n.name === 'Collect AI News -> Generate -> Publish')
-      .parameters.headerParameters.parameters.find((h) => h.name.toLowerCase() === 'authorization').value;
+    // n8n headers may be environment expressions; they cannot be evaluated by
+    // this CLI. Use the application's local credential only for preflight.
+    const dotenv = require(require.resolve('dotenv', { paths: [path.join(ROOT, 'news-digest-pipeline')] }));
+    const env = dotenv.parse(fs.readFileSync(path.join(ROOT, 'news-digest-pipeline', '.env')));
+    if (!env.API_SECRET_KEY) throw new Error('Local application credential is missing');
+    const header = 'Bearer ' + env.API_SECRET_KEY;
     const healthResponse = await fetch(APP_BASE + '/api/health', { headers: { Authorization: header } });
     if (!healthResponse.ok) throw new Error('Production health check failed');
     const health = await healthResponse.json();
