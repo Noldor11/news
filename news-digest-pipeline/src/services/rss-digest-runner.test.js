@@ -8,6 +8,7 @@ import {
   isFreshTechItem,
   parseFeed,
   parseLinkedInPressroom,
+  promoteDigestLead,
   resolveRssSettings,
   scoreItem,
   scoreAppleImportance,
@@ -50,7 +51,6 @@ describe('RSS selection quality gates', () => {
       'Engadget',
       '9to5Google',
       'Android Authority',
-      'MacRumors',
       'GSMArena',
       'The Robot Report',
       'IEEE Spectrum Robotics',
@@ -60,6 +60,7 @@ describe('RSS selection quality gates', () => {
     expect(expected.every((name) => names.has(name))).toBe(true);
     expect(names.has('AWS Machine Learning')).toBe(false);
     expect(names.has('Apple Newsroom')).toBe(false);
+    expect(names.has('MacRumors')).toBe(false);
     expect(new Set(sources.map((source) => source.url)).size).toBe(sources.length);
   });
 
@@ -187,7 +188,7 @@ describe('RSS selection quality gates', () => {
       hardMinArticles: 15,
       maxArticles: 25,
       gadgetArticlesPerDigest: 5,
-      appleArticlesPerDigest: 1,
+      appleArticlesPerDigest: 0,
       marketplaceArticlesPerDigest: 1,
       workMarketArticlesPerDigest: 7,
       workMarketMaxAgeHours: 36,
@@ -200,6 +201,37 @@ describe('RSS selection quality gates', () => {
       maxPerSource: 2,
       recoveryMode: true,
     });
+  });
+
+  it('excludes Apple across gadget and core lanes by default, including product-only titles', () => {
+    const items = [
+      baseItem({ title: 'Mac Studio launches for AI teams', summary: 'New desktop hardware released for model inference.', category: 'gadgets' }),
+      baseItem({ title: 'Siri introduces a new AI model', summary: 'New voice assistant capabilities announced.', source: 'Other' }),
+      baseItem({ title: 'Open source robotics platform released', source: 'Robotics Daily' }),
+    ];
+    const result = selectDigestCandidatesDetailed(items, { limit: 10 });
+    expect(result.selected).toHaveLength(1);
+    expect(result.selected[0].title).toContain('robotics');
+  });
+
+  it('opens with a substantive core AI event without changing quotas or membership', () => {
+    const gadget = baseItem({ category: 'gadgets', title: 'New smartphone launched' });
+    const market = baseItem({ category: 'upwork', title: 'Automation jobs demand grows' });
+    const rumor = baseItem({ title: 'Rumors about an AI launch and new model', source: 'Rumor feed' });
+    const release = baseItem({ title: 'Open-source AI model released for local automation', source: 'Engineering' });
+    const items = [gadget, market, rumor, release];
+    const ordered = promoteDigestLead(items);
+    expect(ordered[0]).toBe(release);
+    expect(ordered.slice(1)).toEqual([gadget, market, rumor]);
+    expect(items[0]).toBe(gadget);
+    expect(new Set(ordered)).toEqual(new Set(items));
+  });
+
+  it('uses a stable non-Apple fallback when there is no core story', () => {
+    const apple = baseItem({ title: 'Apple launches new iPhone', category: 'gadgets' });
+    const work = baseItem({ title: 'AI automation skills demand', category: 'upwork' });
+    expect(promoteDigestLead([apple, work])[0]).toBe(work);
+    expect(promoteDigestLead([])).toEqual([]);
   });
 
   it('keeps only the highest-impact Apple story instead of banning Apple entirely', () => {

@@ -17,7 +17,7 @@ const DEFAULT_MIN_ARTICLES = 23;
 const DEFAULT_HARD_MIN_ARTICLES = 15;
 const DEFAULT_MAX_ARTICLES = 25;
 const DEFAULT_GADGET_ARTICLES = 5;
-const DEFAULT_APPLE_ARTICLES = 1;
+const DEFAULT_APPLE_ARTICLES = 0;
 const DEFAULT_MARKETPLACE_ARTICLES = 1;
 const DEFAULT_WORK_MARKET_ARTICLES = 7;
 const DEFAULT_WORK_MARKET_MAX_AGE_HOURS = 36;
@@ -106,7 +106,6 @@ export const sources = [
   { name: 'Engadget', category: 'gadgets', url: 'https://www.engadget.com/rss.xml' },
   { name: '9to5Google', category: 'gadgets', url: 'https://9to5google.com/feed/' },
   { name: 'Android Authority', category: 'gadgets', url: 'https://www.androidauthority.com/feed/' },
-  { name: 'MacRumors', category: 'gadgets', url: 'https://feeds.macrumors.com/MacRumors-Front' },
   { name: 'GSMArena', category: 'gadgets', url: 'https://www.gsmarena.com/rss-news-reviews.php3' },
   { name: 'The Robot Report', category: 'gadgets', url: 'https://www.therobotreport.com/feed/' },
   { name: 'IEEE Spectrum Robotics', brand: 'IEEE Spectrum', category: 'gadgets', url: 'https://spectrum.ieee.org/feeds/topic/robotics.rss' },
@@ -194,7 +193,8 @@ const gadgetTerms = [
 
 const appleEcosystemTerms = [
   'apple', 'iphone', 'ipad', 'imac', 'macbook', 'mac mini', 'mac pro', 'macos', 'airpods',
-  'homepod', 'watchos', 'vision pro', 'visionos', 'apple intelligence',
+  'homepod', 'watchos', 'vision pro', 'visionos', 'apple intelligence', 'mac studio',
+  'apple watch', 'apple silicon', 'siri', 'ios', 'ipados', 'airtag',
 ];
 
 const appleHighImpactTerms = [
@@ -823,6 +823,31 @@ export function isGadgetItem(item) {
   return item?.category === 'gadgets' || item?.feedCategory === 'gadgets';
 }
 
+export function scoreDigestLead(item) {
+  const text = [item.title, item.summary].join(' ').toLowerCase();
+  const ai = ['ai', 'artificial intelligence', 'llm', 'machine learning', 'automation', 'robotics']
+    .some((term) => containsTerm(text, term));
+  const event = /\b(?:launch(?:es|ed)?|releas(?:e|es|ed)|introduc(?:e|es|ed)|open.source|breakthrough)\b/.test(text);
+  const impact = /\b(?:actively exploited|data breach|zero.day|critical vulnerability|security patch)\b/.test(text);
+  const lowSignal = /\b(?:rumou?rs?|leaks?|reviews?|deals?|discounts?|tips|how to|best apps)\b/.test(text);
+  const meta = scoreItem(item);
+  return (ai ? 6 : 0) + (event ? 6 : 0) + (impact ? 8 : 0) - (lowSignal ? 15 : 0)
+    + Math.min(6, meta.techScore / 3) + Math.max(0, 36 - meta.ageHours) / 6;
+}
+
+// Lane reservations choose membership, not editorial priority. Move one
+// strong core story to the front without changing the selected set or quotas.
+export function promoteDigestLead(items) {
+  const eligible = items.filter((item) => !isAppleEcosystemItem(item));
+  const core = eligible.filter((item) => (item.category || item.feedCategory || 'ai-tech') === 'ai-tech');
+  const ranked = [...(core.length ? core : eligible)].sort((a, b) =>
+    scoreDigestLead(b) - scoreDigestLead(a)
+    || (Date.parse(b.publishedAt) || 0) - (Date.parse(a.publishedAt) || 0)
+    || String(a.url).localeCompare(String(b.url)));
+  const lead = ranked[0];
+  return lead ? [lead, ...items.filter((item) => item !== lead)] : [...items];
+}
+
 /**
  * Reserve the requested candidates for each configured lane before filling
  * the remaining slots from the general AI/tech pool.
@@ -1294,6 +1319,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress, recoveryMod
     });
   }
   const selectedArticleIds = [];
+  const selectedItems = [];
   const insertedArticleIds = [];
   let exactDuplicates = 0;
   let reused = 0;
@@ -1320,6 +1346,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress, recoveryMod
       if (canReuseArticle(result) && !selectedArticleIds.includes(result.id)) {
         if (result.status === 'error') resetArticlesForRetry([result.id]);
         selectedArticleIds.push(result.id);
+        selectedItems.push({ ...item, articleId: result.id });
         reused += 1;
       }
       continue;
@@ -1327,6 +1354,7 @@ export async function runDailyRssDigest({ onDigestReady, onProgress, recoveryMod
 
     insertedArticleIds.push(result.id);
     selectedArticleIds.push(result.id);
+    selectedItems.push({ ...item, articleId: result.id });
   }
 
   const selectedMode = classifyArticleCount(selectedArticleIds.length, settings);
@@ -1348,7 +1376,8 @@ export async function runDailyRssDigest({ onDigestReady, onProgress, recoveryMod
     );
   }
 
-  const articles = getArticlesByIds(db, selectedArticleIds);
+  const orderedIds = promoteDigestLead(selectedItems).map((item) => item.articleId);
+  const articles = getArticlesByIds(db, orderedIds);
   const articleMode = classifyArticleCount(articles.length, settings);
   if (articleMode === 'insufficient') {
     for (const articleId of insertedArticleIds) deleteArticle(articleId);

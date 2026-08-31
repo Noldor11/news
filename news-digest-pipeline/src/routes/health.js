@@ -46,6 +46,7 @@ healthDetailsRouter.get('/', (req, res) => {
         publishedAt: latestPublished.published_at,
       } : null,
       latestRun: latestRun ? {
+        runId: latestRun.id,
         runKey: latestRun.run_key,
         status: latestRun.status,
         stage: latestRun.stage || null,

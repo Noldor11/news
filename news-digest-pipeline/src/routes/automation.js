@@ -3,6 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import config from '../config.js';
 import {
   claimAutomationRun,
+  getAutomationRun,
   getAutomationRunByKey,
   getDigest,
   updateAutomationRun,
@@ -21,6 +22,7 @@ import { runWeeklyMarketplaceReport } from '../services/weekly-marketplace-repor
 import { publishDigest } from '../services/publishers/index.js';
 import { sendMessage } from '../services/telegram-bot.js';
 import { redactSecrets, safeErrorMessage } from '../security/redact.js';
+import { automationRunStatus } from '../services/automation-run-status.js';
 
 const router = Router();
 
@@ -197,29 +199,43 @@ async function resumeSafeTelegramPublish(run) {
 
 // Scheduled runs share the day's idempotency key. Manual runs receive a unique
 // key, so testing cannot consume the 18:00 publication slot.
-async function executeDigest(req, res, trigger) {
+export async function executeDigest(req, res, trigger) {
   const runKey = getRunKey(trigger);
   const claim = claimAutomationRun(runKey, trigger);
 
   if (!claim.claimed) {
-    const status = claim.run.status;
     const scheduledTrigger = ['schedule', 'recovery'].includes(trigger);
     const validScheduledRetry = !scheduledTrigger || isValidScheduledRun(claim.run);
-    const safelyPublished = status === 'published' && validScheduledRetry;
-    const reason = status === 'published' && !validScheduledRetry
-      ? 'published_before_schedule'
-      : status;
-
-    return res.status(safelyPublished ? 200 : 409).json({
-      ok: safelyPublished,
+    const status = automationRunStatus(claim.run, { validPublished: validScheduledRetry });
+    return res.status(status.pending ? 202 : status.ok ? 200 : 409).json({
+      ...status,
       skipped: true,
-      reason,
+      reason: status.state,
       runKey,
       trigger,
       digestId: claim.run.digest_id || null,
     });
   }
 
+  // The durable run claim is written before acknowledging. Processing no
+  // longer depends on the lifetime of the caller's HTTP connection.
+  const asynchronous = trigger !== 'manual' || req.get('prefer') === 'respond-async';
+  if (asynchronous) {
+    const status = automationRunStatus(claim.run);
+    setImmediate(() => {
+      processDigestRun(claim, trigger).catch((error) => {
+        console.error('[automation] background run error:', safeErrorMessage(error, 'Background run failed', configuredSecrets()));
+      });
+    });
+    return res.status(202).json({ ...status, accepted: true, trigger });
+  }
+  const result = await processDigestRun(claim, trigger);
+  return res.status(result.httpStatus).json(result.body);
+}
+
+async function processDigestRun(claim, trigger) {
+  const runKey = claim.run.run_key;
+  const respond = (httpStatus, body) => ({ httpStatus, body });
   let phase = 'collecting';
   updateAutomationRun(claim.run.id, { status: 'running', stage: 'collecting' });
 
@@ -251,7 +267,7 @@ async function executeDigest(req, res, trigger) {
     const outcome = setTelegramRunResult(claim.run.id, digestId, telegram, result);
 
     if (!telegram?.ok) {
-      return res.status(outcome.httpStatus).json({
+      return respond(outcome.httpStatus, {
         ok: false,
         runKey,
         trigger,
@@ -277,7 +293,7 @@ async function executeDigest(req, res, trigger) {
       if (!alertResult?.ok) console.error('[automation] degraded digest alert failed:', alertResult?.error);
     }
 
-    return res.status(outcome.httpStatus).json({
+    return respond(outcome.httpStatus, {
       ok: true,
       runKey,
       trigger,
@@ -306,7 +322,7 @@ async function executeDigest(req, res, trigger) {
       completed_at: status === 'partial' ? finishedAt() : null,
     });
     console.error('[automation] digest run error:', safeError);
-    return res.status(status === 'partial' ? 409 : retryable ? 500 : 422).json({
+    return respond(status === 'partial' ? 409 : retryable ? 500 : 422, {
       ok: false,
       retryable,
       runKey,
@@ -316,6 +332,13 @@ async function executeDigest(req, res, trigger) {
       error: safeError,
     });
   }
+}
+
+export function getRunStatus(req, res) {
+  const run = getAutomationRun(req.params.id);
+  const scheduled = ['schedule', 'recovery'].includes(run?.trigger);
+  const status = automationRunStatus(run, { validPublished: !scheduled || isValidScheduledRun(run) });
+  return res.status(run ? 200 : 404).json(status);
 }
 
 function executeScheduledDigest(req, res) {
@@ -489,5 +512,6 @@ router.post('/daily-watchdog', requireDailyTriggerSecret, executeDailyWatchdog);
 router.post('/alert', requireDailyTriggerSecret, executeAutomationAlert);
 router.post('/weekly-marketplace', requireWeeklyTriggerSecret, executeWeeklyMarketplace);
 router.post('/manual-digest', (req, res) => executeDigest(req, res, 'manual'));
+router.get('/runs/:id', getRunStatus);
 
 export default router;
