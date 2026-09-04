@@ -77,7 +77,7 @@ export async function runWeeklyMarketplaceReport({
     error.retryable = false;
     throw error;
   }
-  if (!collected.upwork || !collected.fiverr) {
+  if (!collected.upwork && !collected.fiverr) {
     const missing = [
       !collected.upwork ? 'Upwork' : null,
       !collected.fiverr ? 'Fiverr' : null,

@@ -59,15 +59,34 @@ describe('weekly marketplace report', () => {
     expect(result).toMatchObject({ ok: true, upworkItems: 30, fiverrItems: 30 });
   });
 
-  it('does not publish a partial report when one marketplace failed', async () => {
-    const publish = vi.fn();
+  it('publishes the available marketplace when the other source failed', async () => {
+    const publish = vi.fn().mockResolvedValue({ ok: true, messageIds: ['502'] });
     const partial = { ...collected, fiverr: null, errors: ['Fiverr: timeout'] };
 
-    await expect(runWeeklyMarketplaceReport({
+    const result = await runWeeklyMarketplaceReport({
       appConfig: { telegramBotToken: 'test-token', telegramPublishChatId: '-1001' },
       collect: vi.fn().mockResolvedValue(partial),
       publish,
-    })).rejects.toThrow('incomplete (Fiverr)');
+    });
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      'test-token',
+      '-1001',
+      expect.stringContaining('FIVERR\nДанные за неделю получить не удалось.'),
+    );
+    expect(result).toMatchObject({ ok: true, degraded: true, upworkItems: 30, fiverrItems: 0 });
+  });
+
+  it('does not publish an empty report when both marketplaces failed', async () => {
+    const publish = vi.fn();
+    const empty = { ...collected, upwork: null, fiverr: null, errors: ['Upwork: timeout', 'Fiverr: timeout'] };
+
+    await expect(runWeeklyMarketplaceReport({
+      appConfig: { telegramBotToken: 'test-token', telegramPublishChatId: '-1001' },
+      collect: vi.fn().mockResolvedValue(empty),
+      publish,
+    })).rejects.toThrow('incomplete (Upwork, Fiverr)');
     expect(publish).not.toHaveBeenCalled();
   });
 });

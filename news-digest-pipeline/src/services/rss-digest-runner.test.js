@@ -103,7 +103,7 @@ describe('RSS selection quality gates', () => {
           <link>https://news.google.com/rss/articles/independent</link>
           <description>This independent report contains enough marketplace and technology text to pass the normal minimum summary length filter.</description>
           <pubDate>${freshDate}</pubDate>
-          <source url="https://example.com">Independent Tech</source>
+          <source url="https://www.reuters.com">Reuters</source>
         </item>
       </channel></rss>`;
     const items = parseFeed(xml, {
@@ -114,8 +114,8 @@ describe('RSS selection quality gates', () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
-      publisher: 'Independent Tech',
-      publisherUrl: 'https://example.com/',
+      publisher: 'Reuters',
+      publisherUrl: 'https://www.reuters.com/',
     });
   });
 
@@ -146,14 +146,42 @@ describe('RSS selection quality gates', () => {
           <link>https://news.google.com/rss/articles/report</link>
           <description>This independent report contains enough freelance hiring and technology detail to pass the summary length filter.</description>
           <pubDate>${freshDate}</pubDate>
-          <source url="https://example.com">Independent Tech</source>
+          <source url="https://www.reuters.com">Reuters</source>
         </item>
       </channel></rss>`;
     const source = sources.find((entry) => entry.name === 'Google News Upwork Market');
     const items = parseFeed(xml, source);
 
     expect(items).toHaveLength(1);
-    expect(items[0].publisher).toBe('Independent Tech');
+    expect(items[0].publisher).toBe('Reuters');
+  });
+
+  it('keeps only trusted publishers when a market lane defines an allowlist', () => {
+    const xml = `
+      <rss><channel>
+        <item>
+          <title>Upwork market demand changes</title>
+          <link>https://news.google.com/rss/articles/unknown</link>
+          <description>An unknown publisher claims a major change in freelance hiring and marketplace demand.</description>
+          <pubDate>${freshDate}</pubDate>
+          <source url="https://unknown.example">Unknown Blog</source>
+        </item>
+        <item>
+          <title>Upwork market demand changes after AI adoption</title>
+          <link>https://news.google.com/rss/articles/trusted</link>
+          <description>A trusted publisher reports measurable changes in freelance hiring and automation demand.</description>
+          <pubDate>${freshDate}</pubDate>
+          <source url="https://www.reuters.com">Reuters</source>
+        </item>
+      </channel></rss>`;
+
+    const items = parseFeed(xml, {
+      name: 'Upwork Market',
+      category: 'upwork',
+      allowedPublisherDomains: ['reuters.com'],
+    });
+
+    expect(items.map((item) => item.publisher)).toEqual(['Reuters']);
   });
 
   it('filters broad feeds with whole-word work-market terms', () => {
@@ -180,6 +208,59 @@ describe('RSS selection quality gates', () => {
     });
 
     expect(items.map((item) => item.url)).toEqual(['https://example.com/freelance-ai']);
+  });
+
+  it('requires the named platform in the title for platform news lanes', () => {
+    const xml = `
+      <rss><channel>
+        <item>
+          <title>AI model provider suffers a major outage</title>
+          <link>https://example.com/unrelated</link>
+          <description>The article footer mentions LinkedIn sharing and hiring, but the story is not about the platform.</description>
+          <pubDate>${freshDate}</pubDate>
+        </item>
+        <item>
+          <title>LinkedIn changes its AI hiring tools</title>
+          <link>https://example.com/linkedin-hiring</link>
+          <description>The professional network updated automation and hiring features for recruiters and independent workers.</description>
+          <pubDate>${freshDate}</pubDate>
+        </item>
+      </channel></rss>`;
+
+    const items = parseFeed(xml, {
+      name: 'LinkedIn Market',
+      category: 'linkedin',
+      requiredTitleTerms: ['linkedin'],
+    });
+
+    expect(items.map((item) => item.url)).toEqual(['https://example.com/linkedin-hiring']);
+  });
+
+  it('rejects vacancy listings from platform news lanes', () => {
+    const xml = `
+      <rss><channel>
+        <item>
+          <title>[Hiring] Automation specialist at an Upwork company</title>
+          <link>https://example.com/job-listing</link>
+          <description>This public job listing contains enough Upwork and freelance marketplace terms to pass ordinary relevance checks.</description>
+          <pubDate>${freshDate}</pubDate>
+        </item>
+        <item>
+          <title>Upwork changes how AI automation specialists are discovered</title>
+          <link>https://example.com/upwork-market-news</link>
+          <description>This independent report explains a marketplace change affecting freelancers, clients, hiring, and automation demand.</description>
+          <pubDate>${freshDate}</pubDate>
+        </item>
+      </channel></rss>`;
+
+    const items = parseFeed(xml, {
+      name: 'Upwork Market',
+      category: 'upwork',
+      requiredTitleTerms: ['upwork'],
+      blockedTitleFragments: ['[hiring]', 'job opening'],
+    });
+
+    expect(items.map((item) => item.url)).toEqual(['https://example.com/upwork-market-news']);
   });
 
   it('uses the 23-25 article policy with five gadget and one platform slot by default', () => {

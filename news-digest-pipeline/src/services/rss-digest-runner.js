@@ -53,6 +53,15 @@ const blockedSocialPublisherDomains = [
   'x.com',
   'youtube.com',
 ];
+const trustedWorkMarketPublisherDomains = [
+  'reuters.com', 'apnews.com', 'bbc.com', 'bbc.co.uk', 'axios.com', 'bloomberg.com',
+  'cnbc.com', 'wsj.com', 'nytimes.com', 'ft.com', 'theguardian.com', 'fortune.com',
+  'fastcompany.com', 'businessinsider.com', 'forbes.com', 'techcrunch.com',
+  'theverge.com', 'wired.com', 'zdnet.com', 'arstechnica.com', 'venturebeat.com',
+  'techradar.com', 'thenextweb.com', 'theregister.com', 'semafor.com', 'pymnts.com',
+  'hrdive.com', 'worklife.news', 'allwork.space', 'freelanceinformer.com',
+  'hiringlab.org', 'dev.ua', 'indianexpress.com', 'gulfbusiness.com', 'tnglobal.com',
+];
 
 export const sources = [
   { name: 'TechCrunch AI', brand: 'TechCrunch', url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },
@@ -114,13 +123,27 @@ export const sources = [
     category: 'upwork',
     usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=%22Upwork%22%20(freelance%20OR%20freelancer%20OR%20hiring%20OR%20jobs%20OR%20demand%20OR%20fees%20OR%20policy)%20-site%3Aupwork.com%20-site%3Ainvestors.upwork.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
+    requiredTitleTerms: ['upwork'],
+    blockedTitleFragments: ['[hiring]', 'job opening', 'apply now', 'vacancy', '@lifted'],
+    allowedPublisherDomains: trustedWorkMarketPublisherDomains,
     blockedPublisherDomains: ['upwork.com', ...blockedSocialPublisherDomains],
+  },
+  {
+    name: 'Redwater Upwork Automation Market',
+    category: 'upwork',
+    url: 'https://upwork.redwaterrev.com/rss.xml',
+    minSummaryLength: 0,
+    enrichArticleSummary: true,
+    requiredAnyTerms: workMarketFeedTerms,
   },
   {
     name: 'Google News Fiverr Market',
     category: 'fiverr',
     usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=%22Fiverr%22%20(freelance%20OR%20freelancer%20OR%20hiring%20OR%20jobs%20OR%20demand%20OR%20fees%20OR%20policy)%20-site%3Afiverr.com%20-site%3Ainvestors.fiverr.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
+    requiredTitleTerms: ['fiverr'],
+    blockedTitleFragments: ['promo code', 'coupon', 'apk', 'how to make money', 'insider sells shares'],
+    allowedPublisherDomains: trustedWorkMarketPublisherDomains,
     blockedPublisherDomains: ['fiverr.com', ...blockedSocialPublisherDomains],
   },
   {
@@ -128,6 +151,8 @@ export const sources = [
     category: 'linkedin',
     usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=%22LinkedIn%22%20(hiring%20OR%20jobs%20OR%20freelance%20OR%20workforce%20OR%20AI%20OR%20automation)%20-site%3Alinkedin.com%20-site%3Anews.linkedin.com%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
+    requiredTitleTerms: ['linkedin'],
+    allowedPublisherDomains: trustedWorkMarketPublisherDomains,
     blockedPublisherDomains: blockedSocialPublisherDomains,
   },
   { name: 'LinkedIn Pressroom', category: 'linkedin', format: 'linkedin-pressroom', url: 'https://news.linkedin.com/' },
@@ -136,7 +161,8 @@ export const sources = [
     category: 'freelance-market',
     usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=(%22freelance%20market%22%20OR%20%22gig%20economy%22%20OR%20%22independent%20work%22%20OR%20%22contingent%20workforce%22)%20(AI%20OR%20automation%20OR%20hiring%20OR%20demand%20OR%20rates%20OR%20jobs)%20when%3A2d&hl=en-US&gl=US&ceid=US%3Aen',
-    requiredAnyTerms: workMarketFeedTerms,
+    requiredAnyTerms: strictFreelanceFeedTerms,
+    allowedPublisherDomains: trustedWorkMarketPublisherDomains,
     blockedPublisherDomains: blockedSocialPublisherDomains,
   },
   {
@@ -144,31 +170,46 @@ export const sources = [
     category: 'freelance-market',
     usePublisherAsBrand: true,
     url: 'https://news.google.com/rss/search?q=(%22AI%20automation%22%20OR%20%22AI%20agents%22%20OR%20n8n%20OR%20Zapier%20OR%20%22Make.com%22)%20(freelance%20OR%20jobs%20OR%20hiring%20OR%20demand%20OR%20skills)%20when%3A2d&hl=en-US&gl=US&ceid=US%3Aen',
-    requiredAnyTerms: workMarketFeedTerms,
+    requiredAnyTerms: strictFreelanceFeedTerms,
+    allowedPublisherDomains: trustedWorkMarketPublisherDomains,
     blockedPublisherDomains: blockedSocialPublisherDomains,
+  },
+  {
+    name: 'Google News Freelance Platforms',
+    category: 'freelance-market',
+    usePublisherAsBrand: true,
+    url: 'https://news.google.com/rss/search?q=(%22Upwork%22%20OR%20%22Fiverr%22%20OR%20%22Toptal%22%20OR%20%22Contra%22%20OR%20%22Freelancer.com%22)%20(freelance%20OR%20marketplace%20OR%20AI%20OR%20automation%20OR%20hiring%20OR%20fees%20OR%20policy)%20when%3A3d&hl=en-US&gl=US&ceid=US%3Aen',
+    requiredAnyTerms: strictFreelanceFeedTerms,
+    allowedPublisherDomains: trustedWorkMarketPublisherDomains,
+    blockedPublisherDomains: ['upwork.com', 'fiverr.com', 'freelancer.com', ...blockedSocialPublisherDomains],
   },
   {
     name: 'Indeed Hiring Lab',
     category: 'freelance-market',
     url: 'https://www.hiringlab.org/feed/',
-    requiredAnyTerms: workMarketFeedTerms,
+    requiredAnyTerms: strictFreelanceFeedTerms,
   },
   {
     name: 'Allwork Space Workforce',
     brand: 'Allwork Space',
     category: 'freelance-market',
     url: 'https://allwork.space/category/workforce/feed/',
-    requiredAnyTerms: workMarketFeedTerms,
+    requiredAnyTerms: strictFreelanceFeedTerms,
   },
   {
     name: 'Allwork Space Tech',
     brand: 'Allwork Space',
     category: 'freelance-market',
     url: 'https://allwork.space/category/tech/feed/',
-    requiredAnyTerms: workMarketFeedTerms,
+    requiredAnyTerms: strictFreelanceFeedTerms,
   },
   { name: 'Freelancers Union', category: 'freelance-market', url: 'https://blog.freelancersunion.org/rss/' },
-  { name: 'Freelance Informer AI', category: 'freelance-market', url: 'https://www.freelanceinformer.com/category/artificial-intelligence/feed/' },
+  {
+    name: 'Freelance Informer',
+    category: 'freelance-market',
+    url: 'https://www.freelanceinformer.com/feed/',
+    requiredAnyTerms: workMarketFeedTerms,
+  },
   {
     name: 'PYMNTS Freelance Market',
     category: 'freelance-market',
@@ -481,6 +522,23 @@ export function isBlockedPublisher(source, publisherUrl) {
   }
 }
 
+function isAllowedPublisher(source, publisherUrl) {
+  const allowedDomains = Array.isArray(source?.allowedPublisherDomains)
+    ? source.allowedPublisherDomains
+    : [];
+  if (!allowedDomains.length) return true;
+  if (!publisherUrl) return false;
+  try {
+    const hostname = new URL(publisherUrl).hostname.toLowerCase().replace(/^www\./, '');
+    return allowedDomains.some((domain) => {
+      const normalized = String(domain || '').toLowerCase().replace(/^www\./, '');
+      return hostname === normalized || hostname.endsWith(`.${normalized}`);
+    });
+  } catch {
+    return false;
+  }
+}
+
 function containsTerm(text, term) {
   const normalizedTerm = String(term || '').trim().toLowerCase();
   if (!normalizedTerm) return false;
@@ -493,10 +551,19 @@ function containsTerm(text, term) {
 }
 
 function matchesRequiredSourceTerms(item, source) {
+  const title = String(item.title || '').toLowerCase();
+  const blockedTitleFragments = Array.isArray(source?.blockedTitleFragments)
+    ? source.blockedTitleFragments
+    : [];
+  if (blockedTitleFragments.some((fragment) => title.includes(String(fragment).toLowerCase()))) return false;
+
   const requiredTerms = Array.isArray(source?.requiredAnyTerms) ? source.requiredAnyTerms : [];
-  if (requiredTerms.length === 0) return true;
   const text = `${item.title || ''} ${item.summary || ''}`.toLowerCase();
-  return requiredTerms.some((term) => containsTerm(text, term));
+  if (requiredTerms.length > 0 && !requiredTerms.some((term) => containsTerm(text, term))) return false;
+
+  const requiredTitleTerms = Array.isArray(source?.requiredTitleTerms) ? source.requiredTitleTerms : [];
+  return requiredTitleTerms.length === 0
+    || requiredTitleTerms.some((term) => containsTerm(title, term));
 }
 
 export function parseFeed(xml, source) {
@@ -539,6 +606,7 @@ export function parseFeed(xml, source) {
   }).filter((item) => item.title
     && item.url
     && item.summary.length >= minSummaryLength
+    && isAllowedPublisher(source, item.publisherUrl)
     && !isBlockedPublisher(source, item.publisherUrl)
     && matchesRequiredSourceTerms(item, source));
 }
